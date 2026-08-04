@@ -6,11 +6,7 @@ A single Docker container that bundles `cloudflared` itself and a small
 Python controller that creates a Cloudflare Tunnel and its hostnames
 straight from environment variables you set on the container.
 
-## Why not Dockflare?
-
-[Dockflare](https://github.com/ChrispyBacon-dev/DockFlare) does something
-similar and this project doesn't duplicate its code, but it solves a
-different set of trade-offs:
+## Design principles
 
 - **One container, not two.** `cloudflared` runs inside this container
   (as PID 1, via `exec`) instead of a separate container you have to wire
