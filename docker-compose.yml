@@ -1,0 +1,18 @@
+services:
+  tunnel:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - tunnel-data:/data
+    depends_on:
+      - whoami
+
+  # Example app exposed through the tunnel -- replace with your own services
+  # and point TUNNEL_SERVICE_N at them using their compose service name.
+  whoami:
+    image: traefik/whoami:latest
+    restart: unless-stopped
+
+volumes:
+  tunnel-data:
