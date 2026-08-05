@@ -41,13 +41,16 @@ def main() -> None:
     log.info("fetching accessible zones for hostname auto-detection")
     zones = client.list_zones()
 
-    reconcile.reconcile_hostnames(client, tunnel, hostnames, state, zones)
+    routes = [cfg for cfg in hostnames if cfg.is_route]
+    path_scopes = [cfg for cfg in hostnames if not cfg.is_route]
+    reconcile.reconcile_routes(client, tunnel, routes, state, zones)
+    reconcile.reconcile_path_scopes(client, path_scopes, state)
     state_mod.save(STATE_PATH, state)
 
     config_text = reconcile.render_local_config(tunnel, CREDENTIALS_PATH, hostnames)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         f.write(config_text)
-    log.info("wrote %s with %d hostname(s)", CONFIG_PATH, len(hostnames))
+    log.info("wrote %s with %d route(s)", CONFIG_PATH, len(routes))
 
     log.info("starting cloudflared tunnel %s", tunnel["name"])
     os.execvp("cloudflared", ["cloudflared", "tunnel", "--config", CONFIG_PATH, "run", tunnel["name"]])

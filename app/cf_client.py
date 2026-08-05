@@ -89,13 +89,13 @@ class CloudflareClient:
 
     # -- Access ------------------------------------------------------------
 
-    def create_access_app(self, hostname: str) -> str:
+    def create_access_app(self, domain: str) -> str:
         payload = self._request(
             "POST",
             f"/accounts/{self.account_id}/access/apps",
             json={
-                "name": hostname,
-                "domain": hostname,
+                "name": domain,
+                "domain": domain,
                 "type": "self_hosted",
                 "session_duration": "24h",
             },
@@ -106,8 +106,8 @@ class CloudflareClient:
         # Deleting the app cascades to its app-scoped policies.
         self._request("DELETE", f"/accounts/{self.account_id}/access/apps/{app_id}")
 
-    def create_access_policy(self, app_id: str, hostname: str, accesstype: str, authusers: tuple) -> str:
-        body = _access_policy_body(hostname, accesstype, authusers)
+    def create_access_policy(self, app_id: str, domain: str, authusers: tuple) -> str:
+        body = _access_policy_body(domain, authusers)
         payload = self._request(
             "POST",
             f"/accounts/{self.account_id}/access/apps/{app_id}/policies",
@@ -115,10 +115,8 @@ class CloudflareClient:
         )
         return payload["result"]["id"]
 
-    def update_access_policy(
-        self, app_id: str, policy_id: str, hostname: str, accesstype: str, authusers: tuple
-    ) -> None:
-        body = _access_policy_body(hostname, accesstype, authusers)
+    def update_access_policy(self, app_id: str, policy_id: str, domain: str, authusers: tuple) -> None:
+        body = _access_policy_body(domain, authusers)
         self._request(
             "PUT",
             f"/accounts/{self.account_id}/access/apps/{app_id}/policies/{policy_id}",
@@ -126,13 +124,9 @@ class CloudflareClient:
         )
 
 
-def _access_policy_body(hostname: str, accesstype: str, authusers: tuple) -> dict:
-    if accesstype == "bypass":
-        return {"name": f"{hostname}-bypass", "decision": "bypass", "include": [{"everyone": {}}]}
-    if accesstype == "auth":
-        return {
-            "name": f"{hostname}-auth",
-            "decision": "allow",
-            "include": [{"email": {"email": email}} for email in authusers],
-        }
-    raise ValueError(f"no Access policy needed for accesstype={accesstype!r}")
+def _access_policy_body(domain: str, authusers: tuple) -> dict:
+    return {
+        "name": f"{domain}-auth",
+        "decision": "allow",
+        "include": [{"email": {"email": email}} for email in authusers],
+    }

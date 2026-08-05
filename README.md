@@ -27,14 +27,13 @@ live as other containers start/stop.
 
 ## How it works
 
-1. On startup, the controller reads `HOSTNAME_N` / `SERVICE_N`
-   / `ACCESS_N` / `AUTH_USERS_N` variables (indexed from `1`,
-   stopping at the first gap).
+1. On startup, the controller reads `HOSTNAME_N` / `SERVICE_N` / `USERS_N`
+   variables (indexed from `1`, stopping at the first gap).
 2. It creates a Cloudflare Tunnel via the API on first run (or reuses the
    one it created previously, persisted in the `/data` volume).
 3. For each hostname it creates a proxied DNS `CNAME` record pointing at
-   the tunnel, and — if `accesstype` is `bypass` or `auth` — a Cloudflare
-   Access application + policy.
+   the tunnel, and — if `USERS_N` is set — a Cloudflare Access application
+   + policy restricted to those emails.
 4. It writes a local `cloudflared` `config.yaml` with the ingress rules
    and `exec`s into `cloudflared tunnel run`, which becomes the
    container's PID 1.
@@ -52,29 +51,39 @@ Set these under the `tunnel` service's `environment:` block in
 | `CLOUDFLARE_API_TOKEN` | yes | Scoped API token, see permissions below |
 | `CLOUDFLARE_ACCOUNT_ID` | yes | Your Cloudflare account ID (dashboard sidebar) |
 | `NAME` | yes | Display name for the tunnel |
-| `HOSTNAME_N` | yes, per hostname | Public FQDN, e.g. `app.example.com` |
-| `SERVICE_N` | yes, per hostname | Where traffic for that hostname is sent, e.g. `http://app:3000` (the tunnel origin, not a URL path filter) |
-| `ACCESS_N` | yes, per hostname | `public`, `bypass`, or `auth` (see below) |
-| `AUTH_USERS_N` | only if `ACCESS_N=auth` | Comma-separated emails allowed to log in |
+| `HOSTNAME_N` | yes, per hostname | Public FQDN, e.g. `app.example.com`, or `app.example.com/admin` to scope just that sub-path (see below) |
+| `SERVICE_N` | yes, unless `HOSTNAME_N` has a path | Where traffic for that hostname is sent, e.g. `http://app:3000` (the tunnel origin, not a URL path filter) |
+| `USERS_N` | no | Comma-separated emails. Set it to require login for that hostname/path; leave it unset to keep it public |
 
 `N` starts at `1` and must be sequential with no gaps — if `HOSTNAME_2`
 is missing, `HOSTNAME_3` and beyond are never read.
 
-### Access types
+### Public vs protected
 
-- **`public`** — no Cloudflare Access application is created at all; the
-  hostname is only protected by whatever the tunnel exposes.
-- **`bypass`** — creates a Cloudflare Access application with a `bypass`
-  policy. Useful to exempt a hostname from a broader/wildcard Access
-  policy on the same zone while still tracking it in Zero Trust.
-- **`auth`** — creates a Cloudflare Access application with an `allow`
-  policy restricted to the emails in `AUTH_USERS_N`.
-
-Login for `auth` hostnames uses Cloudflare Access's built-in email
-one-time-PIN login. That's an account-wide Zero Trust setting
+Whether a hostname needs login is inferred from `USERS_N`, not a separate
+flag: leave it unset for public, set it for a Cloudflare Access application
++ policy restricted to those emails. Login uses Cloudflare Access's
+built-in email one-time-PIN login — an account-wide Zero Trust setting
 (**Settings → Authentication → Login methods → One-time PIN**), not
 something this tool configures — enable it once in your Cloudflare Zero
 Trust dashboard if it isn't already.
+
+### Protecting just a sub-path
+
+`HOSTNAME_N` can include a path, e.g. `HOSTNAME_2=app.example.com/admin`,
+to lock down only that sub-path of an app that's otherwise public. A
+path-scoped entry:
+
+- must have a matching plain-hostname entry elsewhere in the config (the
+  one that actually routes `app.example.com`, e.g. `HOSTNAME_1`) — it
+  reuses that entry's DNS record and tunnel ingress rule rather than
+  creating its own
+- must not set `SERVICE_N` (there's nothing new to route)
+- must set `USERS_N` (a public sub-path doesn't need its own entry)
+
+See the `HOSTNAME_2`/`USERS_2` pair in `docker-compose.yml` for a working
+example: `whoami.example.com` is fully public, but
+`whoami.example.com/admin` requires login.
 
 ### Required API token permissions
 
@@ -101,11 +110,11 @@ service names.
 
 ## Removing a hostname
 
-Delete its `HOSTNAME_N`/`SERVICE_N`/`ACCESS_N`
-variables (re-sequencing the remaining ones so there's no gap) and recreate
-the container. The controller will delete the DNS record and Access
-application it created for that hostname — it never touches anything it
-didn't create itself.
+Delete its `HOSTNAME_N`/`SERVICE_N`/`USERS_N` variables (re-sequencing the
+remaining ones so there's no gap) and recreate the container. The
+controller will delete the DNS record and Access application it created
+for that hostname (or, for a path-scoped entry, just its Access
+application) — it never touches anything it didn't create itself.
 
 ## Persisting the tunnel
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 
-EMPTY_STATE = {"tunnel": None, "hostnames": {}}
+EMPTY_STATE = {"tunnel": None, "routes": {}, "path_scopes": {}}
 
 
 def load(path: str) -> dict:

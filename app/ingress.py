@@ -16,6 +16,8 @@ def render(tunnel_id: str, credentials_path: str, hostnames: list[HostnameConfig
         "ingress:",
     ]
     for cfg in hostnames:
+        if not cfg.is_route:
+            continue  # path-scoped entries reuse their base route's ingress rule
         lines.append(f"  - hostname: {cfg.hostname}")
         lines.append(f"    service: {cfg.service}")
     lines.append("  - service: http_status:404")

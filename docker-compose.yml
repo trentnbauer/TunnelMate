@@ -8,21 +8,20 @@ services:
       CLOUDFLARE_ACCOUNT_ID: changeme
       NAME: Tunnel # Recommend naming the same as the app / purpose
 
-      # Hostname 1: fully public, no Cloudflare Access
+      # Hostname 1: fully public, no Cloudflare Access (no USERS_1 set)
       HOSTNAME_1: whoami.example.com
       SERVICE_1: http://whoami:80
-      ACCESS_1: public
 
-      # Hostname 2: protected by Cloudflare Access, only these emails can log in
-      HOSTNAME_2: admin.example.com
-      SERVICE_2: http://whoami:80
-      ACCESS_2: auth
-      AUTH_USERS_2: you@example.com,teammate@example.com
+      # Hostname 2: same app, but /admin is locked down to just these emails.
+      # No SERVICE_2 -- this reuses HOSTNAME_1's route, it just adds an
+      # Access policy scoped to that path.
+      HOSTNAME_2: whoami.example.com/admin
+      USERS_2: you@example.com,teammate@example.com
 
       # Add more hostnames by continuing the sequence with no gaps, e.g.:
-      # HOSTNAME_3: ...
-      # SERVICE_3: ...
-      # ACCESS_3: bypass
+      # HOSTNAME_3: another.example.com
+      # SERVICE_3: http://another:8080
+      # USERS_3: you@example.com   # omit USERS_N to leave it public
     volumes:
       - tunnel-data:/data
     depends_on:

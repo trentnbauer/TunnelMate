@@ -4,6 +4,17 @@ Config is entirely env-var driven, indexed and sequential starting at 1
 (``HOSTNAME_1``, ``HOSTNAME_2``, ...). Indexing stops at the
 first missing index. This is the tunnel container's OWN environment, never
 Docker labels read off other containers.
+
+Whether a hostname is public or requires login is inferred from whether
+``USERS_N`` is set -- there is no separate access-type field.
+
+``HOSTNAME_N`` may optionally include a path (e.g. ``app.example.com/admin``)
+to protect just that sub-path of an app that's otherwise routed publicly by
+another index for the same bare hostname. A path-scoped entry reuses that
+route's DNS record and tunnel ingress rule -- it only adds a Cloudflare
+Access policy scoped to the path, so it always requires USERS_N (there's no
+point creating one that's public, since the sub-path is already reachable
+via the base route).
 """
 
 from __future__ import annotations
@@ -11,7 +22,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-VALID_ACCESS_TYPES = ("public", "bypass", "auth")
 VALID_SERVICE_SCHEMES = ("http", "https", "tcp")
 
 
@@ -23,9 +33,17 @@ class ConfigError(ValueError):
 class HostnameConfig:
     index: int
     hostname: str
-    service: str
-    accesstype: str
+    path: str | None  # None => whole-hostname route; set => path-scoped Access overlay
+    service: str | None  # required iff path is None
     authusers: tuple[str, ...]
+
+    @property
+    def is_route(self) -> bool:
+        return self.path is None
+
+    @property
+    def scope_key(self) -> str:
+        return self.hostname if self.path is None else f"{self.hostname}{self.path}"
 
 
 def _require(env: dict, name: str) -> str:
@@ -44,47 +62,70 @@ def _validate_service(name: str, value: str) -> str:
     return value
 
 
+def _split_hostname(name: str, raw: str) -> tuple[str, str | None]:
+    if "/" not in raw:
+        return raw, None
+    host, _, rest = raw.partition("/")
+    if not host:
+        raise ConfigError(f"{name}={raw!r} is missing a hostname before the '/'")
+    return host, f"/{rest}"
+
+
 def parse_hostnames(env: dict) -> list[HostnameConfig]:
     """Parse the indexed ``*_{N}`` variables into an ordered list of HostnameConfig.
 
     Raises ConfigError on any missing/invalid/duplicate entry.
     """
     configs: list[HostnameConfig] = []
-    seen_hostnames: dict[str, int] = {}
+    route_hostnames: dict[str, int] = {}
+    path_scopes: dict[tuple[str, str], int] = {}
 
     index = 1
     while f"HOSTNAME_{index}" in env:
-        hostname = _require(env, f"HOSTNAME_{index}")
-        service = _validate_service(f"SERVICE_{index}", _require(env, f"SERVICE_{index}"))
-        accesstype = _require(env, f"ACCESS_{index}").lower()
-        if accesstype not in VALID_ACCESS_TYPES:
-            raise ConfigError(
-                f"ACCESS_{index}={accesstype!r} must be one of {VALID_ACCESS_TYPES}"
-            )
+        hostname, path = _split_hostname(f"HOSTNAME_{index}", _require(env, f"HOSTNAME_{index}"))
 
-        authusers: tuple[str, ...] = ()
-        if accesstype == "auth":
-            raw_users = _require(env, f"AUTH_USERS_{index}")
-            authusers = tuple(u.strip() for u in raw_users.split(",") if u.strip())
+        raw_users = env.get(f"USERS_{index}", "").strip()
+        authusers = tuple(u.strip() for u in raw_users.split(",") if u.strip())
+
+        service_raw = env.get(f"SERVICE_{index}", "").strip()
+        if path is None:
+            if not service_raw:
+                raise ConfigError(f"required environment variable 'SERVICE_{index}' is missing or empty")
+            service = _validate_service(f"SERVICE_{index}", service_raw)
+
+            if hostname in route_hostnames:
+                raise ConfigError(
+                    f"hostname {hostname!r} already has a route (index "
+                    f"{route_hostnames[hostname]}); index {index} duplicates it"
+                )
+            route_hostnames[hostname] = index
+        else:
+            if service_raw:
+                raise ConfigError(
+                    f"SERVICE_{index} must not be set when HOSTNAME_{index} includes a path "
+                    f"-- path-scoped entries reuse the base hostname's existing route"
+                )
             if not authusers:
                 raise ConfigError(
-                    f"AUTH_USERS_{index} must list at least one email when "
-                    f"ACCESS_{index}=auth"
+                    f"USERS_{index} is required when HOSTNAME_{index} includes a path "
+                    f"-- a public sub-path doesn't need its own entry"
                 )
+            service = None
 
-        if hostname in seen_hostnames:
-            raise ConfigError(
-                f"hostname {hostname!r} is configured twice (indexes "
-                f"{seen_hostnames[hostname]} and {index})"
-            )
-        seen_hostnames[hostname] = index
+            key = (hostname, path)
+            if key in path_scopes:
+                raise ConfigError(
+                    f"hostname {hostname!r} path {path!r} is configured twice (indexes "
+                    f"{path_scopes[key]} and {index})"
+                )
+            path_scopes[key] = index
 
         configs.append(
             HostnameConfig(
                 index=index,
                 hostname=hostname,
+                path=path,
                 service=service,
-                accesstype=accesstype,
                 authusers=authusers,
             )
         )
@@ -92,9 +133,16 @@ def parse_hostnames(env: dict) -> list[HostnameConfig]:
 
     if index == 1:
         raise ConfigError(
-            "no hostnames configured: set HOSTNAME_1 / SERVICE_1 / "
-            "ACCESS_1 (and AUTH_USERS_1 if access=auth) at minimum"
+            "no hostnames configured: set HOSTNAME_1 / SERVICE_1 at minimum "
+            "(add USERS_1 to require login)"
         )
+
+    for host, path in path_scopes:
+        if host not in route_hostnames:
+            raise ConfigError(
+                f"hostname {host!r} is path-scoped (e.g. {host}{path}) but no "
+                f"HOSTNAME_*/SERVICE_* entry routes that hostname"
+            )
 
     return configs
 
