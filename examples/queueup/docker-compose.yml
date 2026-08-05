@@ -1,7 +1,11 @@
-# Example: exposing "QueueUp" (a stand-in app name -- swap the `queueup`
-# image for your own) through TunnelMate with the database on a network the
-# tunnel container can never reach. See "Example: network-segmented
-# QueueUp deployment" in ../../README.md for what this buys you and why.
+# Example: exposing a real self-hosted app -- QueueUp
+# (https://github.com/trentnbauer/QueueUp), a game backlog/voting app for a
+# friend group -- through TunnelMate, with its Postgres and Redis on a
+# network the tunnel container can never reach. See "Example:
+# network-segmented QueueUp deployment" in ../../README.md for what this
+# buys you and why. Adapted from QueueUp's own docker-compose.prod.yml --
+# see its README for the full list of optional integrations (game pricing,
+# barcode scanning, etc.) this trims out to keep the example focused.
 
 services:
   tunnel:
@@ -13,54 +17,93 @@ services:
       NAME: QueueUp
 
       HOSTNAME_1: queueup.example.com
-      SERVICE_1: http://queueup:3000
-      # USERS_1: you@example.com   # uncomment to require login instead of public access
+      SERVICE_1: http://app:3000
+      # USERS_1: you@example.com,friend@example.com   # uncomment to require login instead of public access
     volumes:
       - tunnel-data:/data
     networks:
       - frontend
     depends_on:
-      - queueup
+      - app
 
   # The app itself. It's the only service on both networks: it talks to
-  # the tunnel on `frontend` and to the database on `backend`.
-  queueup:
-    image: queueup:latest # placeholder -- not a real published image
+  # the tunnel on `frontend` and to Postgres/Redis on `backend`.
+  app:
+    image: ghcr.io/trentnbauer/queueup:latest
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
-      DATABASE_URL: postgres://queueup:changeme@db:5432/queueup
+      APP_BASE_URL: https://queueup.example.com # must match HOSTNAME_1 above
+      SESSION_SECRET: changeme-to-a-long-random-string
+      # Cloudflare Tunnel is a reverse proxy in front of this container, so it
+      # needs to trust X-Forwarded-For/X-Forwarded-Proto from it -- this is
+      # already QueueUp's default, called out here since it's the reason
+      # session cookies and per-user rate limiting work correctly through a
+      # tunnel/proxy at all.
+      TRUST_PROXY: "true"
+      DATABASE_URL: postgresql://queueup:changeme@postgres:5432/queueup
+      REDIS_URL: redis://redis:6379
+      PORT: 3000
+      # At least one sign-in method is required (or DEV_FAKE_AUTH=true for
+      # local testing only -- never in production). See QueueUp's own
+      # README/.env.example for Google/Discord/Steam/OIDC setup and the
+      # optional game-pricing API keys (gg.deals, IGDB, ScanDex).
+      ADMIN_EMAILS: you@example.com
     networks:
       - frontend
       - backend
-    depends_on:
-      - db
     # No `ports:` here -- nothing needs to be reachable from the host or
     # the internet except through the tunnel.
 
-  # Only on `backend`. The tunnel container has no network path to this
-  # service at all -- not "firewalled off", genuinely unreachable, since it
-  # isn't on `frontend` with the tunnel.
-  db:
-    image: postgres:16-alpine
+  # Only on `backend`. The tunnel container has no network path to these
+  # services at all -- not "firewalled off", genuinely unreachable, since
+  # neither is on `frontend` with the tunnel.
+  postgres:
+    image: postgres:18-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: queueup
       POSTGRES_PASSWORD: changeme
       POSTGRES_DB: queueup
     volumes:
-      - queueup-db:/var/lib/postgresql/data
+      - queueup-postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U queueup"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     networks:
       - backend
-    # No `ports:` here either -- only `queueup` can reach it, over `backend`.
+    # No `ports:` here either -- only `app` can reach it, over `backend`.
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - queueup-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+    # No `ports:` here either -- only `app` can reach it, over `backend`.
 
 networks:
   frontend: {}
   backend:
     # No route out to the internet at all, even for containers on it --
-    # defense in depth if `db` (or anything else on `backend`) is ever
-    # compromised by some other means.
+    # defense in depth if `postgres`/`redis` were ever compromised by some
+    # other means.
     internal: true
 
 volumes:
   tunnel-data:
-  queueup-db:
+  queueup-postgres:
+  queueup-redis:

@@ -106,7 +106,7 @@ docker compose up -d --build
 `docker-compose.yml` includes a demo `whoami` service so you can see the
 tunnel working end to end before pointing it at real apps — replace it
 with your own services and update `SERVICE_N` to use their compose
-service names. For a more realistic setup with a database that should
+service names. For a more realistic setup with data stores that should
 never be reachable through the tunnel, see
 [`examples/queueup/docker-compose.yml`](examples/queueup/docker-compose.yml)
 and "Example: network-segmented QueueUp deployment" below.
@@ -121,39 +121,51 @@ application) — it never touches anything it didn't create itself.
 
 ## Example: network-segmented QueueUp deployment
 
-`examples/queueup/docker-compose.yml` shows a fictional app called
-"QueueUp" (swap `queueup:latest` for whatever you're actually running)
-deployed with its database isolated from the tunnel on Docker's own
-network layer, not just an app-level firewall rule:
+`examples/queueup/docker-compose.yml` deploys
+[QueueUp](https://github.com/trentnbauer/QueueUp) (a real, self-hosted
+game backlog/voting app) with its Postgres and Redis isolated from the
+tunnel on Docker's own network layer, not just an app-level firewall rule:
 
 ```
-  tunnel  -- frontend --  queueup  -- backend --  db
+  tunnel  -- frontend --  app  -- backend --  postgres, redis
   (no route to backend at all)
 ```
 
 - `tunnel` is only attached to the `frontend` network.
-- `db` is only attached to the `backend` network.
-- `queueup` is the only service on both, since it needs to talk to each side.
+- `postgres` and `redis` are only attached to the `backend` network.
+- `app` (QueueUp itself) is the only service on both, since it needs to
+  talk to each side.
 
 Docker only lets containers reach each other over a network they both
-belong to. `tunnel` and `db` never share one, so **the tunnel container has
-no network path to the database at all** — not "blocked by a rule that
-could be misconfigured," genuinely absent at the container-networking
-level. Even in the worst case — the tunnel container or its Cloudflare
-credentials fully compromised — the attacker still has to separately
-compromise `queueup` itself before they can reach `db`; compromising the
-tunnel doesn't hand them the database for free. `db` is also never given a
-`HOSTNAME_N` entry, so it isn't reachable through the Cloudflare Tunnel or
-covered by an Access application either — it's unreachable at both the
-Cloudflare layer and the Docker network layer.
+belong to. `tunnel` and `postgres`/`redis` never share one, so **the
+tunnel container has no network path to either data store at all** — not
+"blocked by a rule that could be misconfigured," genuinely absent at the
+container-networking level. Even in the worst case — the tunnel container
+or its Cloudflare credentials fully compromised — the attacker still has
+to separately compromise `app` itself before they can reach `postgres` or
+`redis`; compromising the tunnel doesn't hand them the database for free.
+Neither is ever given a `HOSTNAME_N` entry, so neither is reachable
+through the Cloudflare Tunnel or covered by an Access application either —
+they're unreachable at both the Cloudflare layer and the Docker network
+layer.
+
+One thing worth not mixing up: `USERS_N` (TunnelMate's own config) gates
+who can reach `app` *at all*, at the Cloudflare edge, before a request
+ever reaches the container. QueueUp's own `ADMIN_EMAILS` is a separate,
+application-level list — it decides who gets admin features (deleting
+rooms/users, etc.) *after* someone has already signed in through one of
+QueueUp's own auth providers (Google/Discord/Steam/OIDC). They're
+independent gates at different layers, not two ways of writing the same
+thing.
 
 A couple of other security properties fall out of this setup basically for
 free:
 
 - **`backend` is `internal: true`**, meaning nothing on it — including
-  `db` — has a route to the internet at all. If `db` (or anything else you
-  later add to `backend`) were compromised through some other channel
-  entirely, it still couldn't phone home or pull down another payload.
+  `postgres` and `redis` — has a route to the internet at all. If either
+  (or anything else you later add to `backend`) were compromised through
+  some other channel entirely, it still couldn't phone home or pull down
+  another payload.
 - **No `ports:` are published on any service, including `tunnel` itself.**
   Cloudflare Tunnel works by `tunnel` making an *outbound* connection to
   Cloudflare's edge, so nothing needs to listen on a host port for inbound
