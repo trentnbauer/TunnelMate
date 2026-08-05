@@ -1,0 +1,66 @@
+# Example: exposing "QueueUp" (a stand-in app name -- swap the `queueup`
+# image for your own) through TunnelMate with the database on a network the
+# tunnel container can never reach. See "Example: network-segmented
+# QueueUp deployment" in ../../README.md for what this buys you and why.
+
+services:
+  tunnel:
+    build: ../.. # points at the TunnelMate repo root; use an image instead once one's published
+    restart: unless-stopped
+    environment:
+      CLOUDFLARE_API_TOKEN: changeme
+      CLOUDFLARE_ACCOUNT_ID: changeme
+      NAME: QueueUp
+
+      HOSTNAME_1: queueup.example.com
+      SERVICE_1: http://queueup:3000
+      # USERS_1: you@example.com   # uncomment to require login instead of public access
+    volumes:
+      - tunnel-data:/data
+    networks:
+      - frontend
+    depends_on:
+      - queueup
+
+  # The app itself. It's the only service on both networks: it talks to
+  # the tunnel on `frontend` and to the database on `backend`.
+  queueup:
+    image: queueup:latest # placeholder -- not a real published image
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://queueup:changeme@db:5432/queueup
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      - db
+    # No `ports:` here -- nothing needs to be reachable from the host or
+    # the internet except through the tunnel.
+
+  # Only on `backend`. The tunnel container has no network path to this
+  # service at all -- not "firewalled off", genuinely unreachable, since it
+  # isn't on `frontend` with the tunnel.
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: queueup
+      POSTGRES_PASSWORD: changeme
+      POSTGRES_DB: queueup
+    volumes:
+      - queueup-db:/var/lib/postgresql/data
+    networks:
+      - backend
+    # No `ports:` here either -- only `queueup` can reach it, over `backend`.
+
+networks:
+  frontend: {}
+  backend:
+    # No route out to the internet at all, even for containers on it --
+    # defense in depth if `db` (or anything else on `backend`) is ever
+    # compromised by some other means.
+    internal: true
+
+volumes:
+  tunnel-data:
+  queueup-db:

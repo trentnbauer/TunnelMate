@@ -106,7 +106,10 @@ docker compose up -d --build
 `docker-compose.yml` includes a demo `whoami` service so you can see the
 tunnel working end to end before pointing it at real apps — replace it
 with your own services and update `SERVICE_N` to use their compose
-service names.
+service names. For a more realistic setup with a database that should
+never be reachable through the tunnel, see
+[`examples/queueup/docker-compose.yml`](examples/queueup/docker-compose.yml)
+and "Example: network-segmented QueueUp deployment" below.
 
 ## Removing a hostname
 
@@ -115,6 +118,51 @@ remaining ones so there's no gap) and recreate the container. The
 controller will delete the DNS record and Access application it created
 for that hostname (or, for a path-scoped entry, just its Access
 application) — it never touches anything it didn't create itself.
+
+## Example: network-segmented QueueUp deployment
+
+`examples/queueup/docker-compose.yml` shows a fictional app called
+"QueueUp" (swap `queueup:latest` for whatever you're actually running)
+deployed with its database isolated from the tunnel on Docker's own
+network layer, not just an app-level firewall rule:
+
+```
+  tunnel  -- frontend --  queueup  -- backend --  db
+  (no route to backend at all)
+```
+
+- `tunnel` is only attached to the `frontend` network.
+- `db` is only attached to the `backend` network.
+- `queueup` is the only service on both, since it needs to talk to each side.
+
+Docker only lets containers reach each other over a network they both
+belong to. `tunnel` and `db` never share one, so **the tunnel container has
+no network path to the database at all** — not "blocked by a rule that
+could be misconfigured," genuinely absent at the container-networking
+level. Even in the worst case — the tunnel container or its Cloudflare
+credentials fully compromised — the attacker still has to separately
+compromise `queueup` itself before they can reach `db`; compromising the
+tunnel doesn't hand them the database for free. `db` is also never given a
+`HOSTNAME_N` entry, so it isn't reachable through the Cloudflare Tunnel or
+covered by an Access application either — it's unreachable at both the
+Cloudflare layer and the Docker network layer.
+
+A couple of other security properties fall out of this setup basically for
+free:
+
+- **`backend` is `internal: true`**, meaning nothing on it — including
+  `db` — has a route to the internet at all. If `db` (or anything else you
+  later add to `backend`) were compromised through some other channel
+  entirely, it still couldn't phone home or pull down another payload.
+- **No `ports:` are published on any service, including `tunnel` itself.**
+  Cloudflare Tunnel works by `tunnel` making an *outbound* connection to
+  Cloudflare's edge, so nothing needs to listen on a host port for inbound
+  traffic to arrive. That means no port-forwarding rule on your router, no
+  open inbound port on the host's firewall, and no service for a port scan
+  of your public IP to find — the entire "attacker finds an open port and
+  probes what's behind it" class of exposure just doesn't apply here,
+  which is a meaningfully different posture than the traditional
+  forward-a-port-to-your-server setup.
 
 ## Persisting the tunnel
 
