@@ -13,7 +13,7 @@ from . import reconcile, state as state_mod
 from .cf_client import CloudflareClient
 from .config import ConfigError, parse_global, parse_hostnames
 
-DATA_DIR = os.environ.get("TUNNEL_DATA_DIR", "/data")
+DATA_DIR = os.environ.get("DATA_DIR", "/data")
 STATE_PATH = os.path.join(DATA_DIR, "state.json")
 CREDENTIALS_PATH = os.path.join(DATA_DIR, "credentials.json")
 CONFIG_PATH = os.path.join(DATA_DIR, "config.yaml")

@@ -9,7 +9,7 @@ services:
       - whoami
 
   # Example app exposed through the tunnel -- replace with your own services
-  # and point TUNNEL_SERVICE_N at them using their compose service name.
+  # and point SERVICE_N at them using their compose service name.
   whoami:
     image: traefik/whoami:latest
     restart: unless-stopped

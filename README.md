@@ -27,8 +27,8 @@ live as other containers start/stop.
 
 ## How it works
 
-1. On startup, the controller reads `TUNNEL_HOSTNAME_N` / `TUNNEL_SERVICE_N`
-   / `TUNNEL_ACCESS_N` / `TUNNEL_AUTH_USERS_N` variables (indexed from `1`,
+1. On startup, the controller reads `HOSTNAME_N` / `SERVICE_N`
+   / `ACCESS_N` / `AUTH_USERS_N` variables (indexed from `1`,
    stopping at the first gap).
 2. It creates a Cloudflare Tunnel via the API on first run (or reuses the
    one it created previously, persisted in the `/data` volume).
@@ -51,14 +51,14 @@ Set these on the `tunnel` service in your `docker-compose.yml` (see
 |---|---|---|
 | `CLOUDFLARE_API_TOKEN` | yes | Scoped API token, see permissions below |
 | `CLOUDFLARE_ACCOUNT_ID` | yes | Your Cloudflare account ID (dashboard sidebar) |
-| `TUNNEL_NAME` | yes | Display name for the tunnel |
-| `TUNNEL_HOSTNAME_N` | yes, per hostname | Public FQDN, e.g. `app.example.com` |
-| `TUNNEL_SERVICE_N` | yes, per hostname | Where traffic for that hostname is sent, e.g. `http://app:3000` (the tunnel origin, not a URL path filter) |
-| `TUNNEL_ACCESS_N` | yes, per hostname | `public`, `bypass`, or `auth` (see below) |
-| `TUNNEL_AUTH_USERS_N` | only if `TUNNEL_ACCESS_N=auth` | Comma-separated emails allowed to log in |
+| `NAME` | yes | Display name for the tunnel |
+| `HOSTNAME_N` | yes, per hostname | Public FQDN, e.g. `app.example.com` |
+| `SERVICE_N` | yes, per hostname | Where traffic for that hostname is sent, e.g. `http://app:3000` (the tunnel origin, not a URL path filter) |
+| `ACCESS_N` | yes, per hostname | `public`, `bypass`, or `auth` (see below) |
+| `AUTH_USERS_N` | only if `ACCESS_N=auth` | Comma-separated emails allowed to log in |
 
-`N` starts at `1` and must be sequential with no gaps — if `TUNNEL_HOSTNAME_2`
-is missing, `TUNNEL_HOSTNAME_3` and beyond are never read.
+`N` starts at `1` and must be sequential with no gaps — if `HOSTNAME_2`
+is missing, `HOSTNAME_3` and beyond are never read.
 
 ### Access types
 
@@ -68,7 +68,7 @@ is missing, `TUNNEL_HOSTNAME_3` and beyond are never read.
   policy. Useful to exempt a hostname from a broader/wildcard Access
   policy on the same zone while still tracking it in Zero Trust.
 - **`auth`** — creates a Cloudflare Access application with an `allow`
-  policy restricted to the emails in `TUNNEL_AUTH_USERS_N`.
+  policy restricted to the emails in `AUTH_USERS_N`.
 
 Login for `auth` hostnames uses Cloudflare Access's built-in email
 one-time-PIN login. That's an account-wide Zero Trust setting
@@ -95,12 +95,12 @@ docker compose up -d --build
 
 `docker-compose.yml` includes a demo `whoami` service so you can see the
 tunnel working end to end before pointing it at real apps — replace it
-with your own services and update `TUNNEL_SERVICE_N` to use their compose
+with your own services and update `SERVICE_N` to use their compose
 service names.
 
 ## Removing a hostname
 
-Delete its `TUNNEL_HOSTNAME_N`/`TUNNEL_SERVICE_N`/`TUNNEL_ACCESS_N`
+Delete its `HOSTNAME_N`/`SERVICE_N`/`ACCESS_N`
 variables (re-sequencing the remaining ones so there's no gap) and recreate
 the container. The controller will delete the DNS record and Access
 application it created for that hostname — it never touches anything it

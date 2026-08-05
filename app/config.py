@@ -1,7 +1,7 @@
 """Parse and validate hostname configuration from environment variables.
 
 Config is entirely env-var driven, indexed and sequential starting at 1
-(``TUNNEL_HOSTNAME_1``, ``TUNNEL_HOSTNAME_2``, ...). Indexing stops at the
+(``HOSTNAME_1``, ``HOSTNAME_2``, ...). Indexing stops at the
 first missing index. This is the tunnel container's OWN environment, never
 Docker labels read off other containers.
 """
@@ -45,7 +45,7 @@ def _validate_service(name: str, value: str) -> str:
 
 
 def parse_hostnames(env: dict) -> list[HostnameConfig]:
-    """Parse ``TUNNEL_*_{N}`` variables into an ordered list of HostnameConfig.
+    """Parse the indexed ``*_{N}`` variables into an ordered list of HostnameConfig.
 
     Raises ConfigError on any missing/invalid/duplicate entry.
     """
@@ -53,25 +53,23 @@ def parse_hostnames(env: dict) -> list[HostnameConfig]:
     seen_hostnames: dict[str, int] = {}
 
     index = 1
-    while f"TUNNEL_HOSTNAME_{index}" in env:
-        hostname = _require(env, f"TUNNEL_HOSTNAME_{index}")
-        service = _validate_service(
-            f"TUNNEL_SERVICE_{index}", _require(env, f"TUNNEL_SERVICE_{index}")
-        )
-        accesstype = _require(env, f"TUNNEL_ACCESS_{index}").lower()
+    while f"HOSTNAME_{index}" in env:
+        hostname = _require(env, f"HOSTNAME_{index}")
+        service = _validate_service(f"SERVICE_{index}", _require(env, f"SERVICE_{index}"))
+        accesstype = _require(env, f"ACCESS_{index}").lower()
         if accesstype not in VALID_ACCESS_TYPES:
             raise ConfigError(
-                f"TUNNEL_ACCESS_{index}={accesstype!r} must be one of {VALID_ACCESS_TYPES}"
+                f"ACCESS_{index}={accesstype!r} must be one of {VALID_ACCESS_TYPES}"
             )
 
         authusers: tuple[str, ...] = ()
         if accesstype == "auth":
-            raw_users = _require(env, f"TUNNEL_AUTH_USERS_{index}")
+            raw_users = _require(env, f"AUTH_USERS_{index}")
             authusers = tuple(u.strip() for u in raw_users.split(",") if u.strip())
             if not authusers:
                 raise ConfigError(
-                    f"TUNNEL_AUTH_USERS_{index} must list at least one email when "
-                    f"TUNNEL_ACCESS_{index}=auth"
+                    f"AUTH_USERS_{index} must list at least one email when "
+                    f"ACCESS_{index}=auth"
                 )
 
         if hostname in seen_hostnames:
@@ -94,8 +92,8 @@ def parse_hostnames(env: dict) -> list[HostnameConfig]:
 
     if index == 1:
         raise ConfigError(
-            "no hostnames configured: set TUNNEL_HOSTNAME_1 / TUNNEL_SERVICE_1 / "
-            "TUNNEL_ACCESS_1 (and TUNNEL_AUTH_USERS_1 if access=auth) at minimum"
+            "no hostnames configured: set HOSTNAME_1 / SERVICE_1 / "
+            "ACCESS_1 (and AUTH_USERS_1 if access=auth) at minimum"
         )
 
     return configs
@@ -112,5 +110,5 @@ def parse_global(env: dict) -> GlobalConfig:
     return GlobalConfig(
         api_token=_require(env, "CLOUDFLARE_API_TOKEN"),
         account_id=_require(env, "CLOUDFLARE_ACCOUNT_ID"),
-        tunnel_name=_require(env, "TUNNEL_NAME"),
+        tunnel_name=_require(env, "NAME"),
     )
