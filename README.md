@@ -44,8 +44,8 @@ live as other containers start/stop.
 
 ## Configuration
 
-Set these on the `tunnel` service in your `docker-compose.yml` (see
-`.env.example`):
+Set these under the `tunnel` service's `environment:` block in
+`docker-compose.yml` — it ships with a commented example already filled in:
 
 | Variable | Required | Description |
 |---|---|---|
@@ -87,9 +87,10 @@ Create a scoped token (**My Profile → API Tokens → Create Token**) with:
 
 ## Usage
 
+Edit the `environment:` block in `docker-compose.yml` with your token,
+account ID, and hostnames, then:
+
 ```bash
-cp .env.example .env
-# edit .env with your token, account id, and hostnames
 docker compose up -d --build
 ```
 
