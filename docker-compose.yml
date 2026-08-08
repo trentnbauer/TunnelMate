@@ -1,22 +1,22 @@
 services:
   tunnel:
-    build: .
+    image: ghcr.io/trentnbauer/tunnelmate:${TMVer:-latest}
     restart: unless-stopped
     environment:
       # Cloudflare account settings
-      CLOUDFLARE_API_TOKEN: changeme
-      CLOUDFLARE_ACCOUNT_ID: changeme
-      NAME: Tunnel # Recommend naming the same as the app / purpose
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-changeme}
+      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-changeme}
+      NAME: ${NAME:-Tunnel} # Recommend naming the same as the app / purpose
 
       # Hostname 1: fully public, no Cloudflare Access (no USERS_1 set)
-      HOSTNAME_1: whoami.example.com
-      SERVICE_1: http://whoami:80
+      HOSTNAME_1: ${HOSTNAME_1:-whoami.example.com}
+      SERVICE_1: ${SERVICE_1:-http://whoami:80}
 
       # Hostname 2: same app, but /admin is locked down to just these emails.
       # No SERVICE_2 -- this reuses HOSTNAME_1's route, it just adds an
       # Access policy scoped to that path.
-      HOSTNAME_2: whoami.example.com/admin
-      USERS_2: you@example.com,teammate@example.com
+      HOSTNAME_2: ${HOSTNAME_2:-whoami.example.com/admin}
+      USERS_2: ${USERS_2:-you@example.com,teammate@example.com}
 
       # Add more hostnames by continuing the sequence with no gaps, e.g.:
       # HOSTNAME_3: another.example.com
