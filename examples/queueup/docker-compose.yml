@@ -9,16 +9,16 @@
 
 services:
   tunnel:
-    build: ../.. # points at the TunnelMate repo root; use an image instead once one's published
+    image: ghcr.io/trentnbauer/tunnelmate:${TMVer:-latest}
     restart: unless-stopped
     environment:
-      CLOUDFLARE_API_TOKEN: changeme
-      CLOUDFLARE_ACCOUNT_ID: changeme
-      NAME: QueueUp
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-changeme}
+      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-changeme}
+      NAME: ${NAME:-QueueUp}
 
-      HOSTNAME_1: queueup.example.com
-      SERVICE_1: http://app:3000
-      # USERS_1: you@example.com,friend@example.com   # uncomment to require login instead of public access
+      HOSTNAME_1: ${HOSTNAME_1:-queueup.example.com}
+      SERVICE_1: ${SERVICE_1:-http://app:3000}
+      USERS_1: ${USERS_1:-} # set to comma-separated emails to require login instead of public access
     volumes:
       - tunnel-data:/data
     networks:
@@ -29,7 +29,7 @@ services:
   # The app itself. It's the only service on both networks: it talks to
   # the tunnel on `frontend` and to Postgres/Redis on `backend`.
   app:
-    image: ghcr.io/trentnbauer/queueup:latest
+    image: ghcr.io/trentnbauer/queueup:${QueueUpVer:-latest}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -37,22 +37,22 @@ services:
       redis:
         condition: service_healthy
     environment:
-      APP_BASE_URL: https://queueup.example.com # must match HOSTNAME_1 above
-      SESSION_SECRET: changeme-to-a-long-random-string
+      APP_BASE_URL: ${APP_BASE_URL:-https://queueup.example.com} # must match HOSTNAME_1 above
+      SESSION_SECRET: ${SESSION_SECRET:-changeme-to-a-long-random-string}
       # Cloudflare Tunnel is a reverse proxy in front of this container, so it
       # needs to trust X-Forwarded-For/X-Forwarded-Proto from it -- this is
       # already QueueUp's default, called out here since it's the reason
       # session cookies and per-user rate limiting work correctly through a
       # tunnel/proxy at all.
       TRUST_PROXY: "true"
-      DATABASE_URL: postgresql://queueup:changeme@postgres:5432/queueup
+      DATABASE_URL: postgresql://queueup:${POSTGRES_PASSWORD:-changeme}@postgres:5432/queueup
       REDIS_URL: redis://redis:6379
       PORT: 3000
       # At least one sign-in method is required (or DEV_FAKE_AUTH=true for
       # local testing only -- never in production). See QueueUp's own
       # README/.env.example for Google/Discord/Steam/OIDC setup and the
       # optional game-pricing API keys (gg.deals, IGDB, ScanDex).
-      ADMIN_EMAILS: you@example.com
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-you@example.com}
     networks:
       - frontend
       - backend
@@ -67,7 +67,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: queueup
-      POSTGRES_PASSWORD: changeme
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
       POSTGRES_DB: queueup
     volumes:
       - queueup-postgres:/var/lib/postgresql

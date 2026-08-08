@@ -6,6 +6,9 @@ A single Docker container that bundles `cloudflared` itself and a small
 Python controller that creates a Cloudflare Tunnel and its hostnames
 straight from environment variables you set on the container.
 
+Published as [`ghcr.io/trentnbauer/tunnelmate`](https://github.com/trentnbauer/TunnelMate/pkgs/container/tunnelmate) —
+no local build required.
+
 ## Design principles
 
 - **One container, not two.** `cloudflared` runs inside this container
@@ -43,11 +46,14 @@ live as other containers start/stop.
 
 ## Configuration
 
-Set these under the `tunnel` service's `environment:` block in
-`docker-compose.yml` — it ships with a commented example already filled in:
+Every value in `docker-compose.yml` is written as `${VAR:-default}`, so the
+file runs as-is (using its defaults) or is overridden per-value from a
+`.env` file without editing the compose file itself — see "Environment
+file" below.
 
 | Variable | Required | Description |
 |---|---|---|
+| `TMVer` | no | Image tag to run — `latest`, a floating `vMAJOR`/`vMAJOR.MINOR`, or a pinned `vMAJOR.MINOR.PATCH` release. Defaults to `latest`. See "Versioning / Releases" below |
 | `CLOUDFLARE_API_TOKEN` | yes | Scoped API token, see permissions below |
 | `CLOUDFLARE_ACCOUNT_ID` | yes | Your Cloudflare account ID (dashboard sidebar) |
 | `NAME` | yes | Display name for the tunnel |
@@ -56,7 +62,10 @@ Set these under the `tunnel` service's `environment:` block in
 | `USERS_N` | no | Comma-separated emails. Set it to require login for that hostname/path; leave it unset to keep it public |
 
 `N` starts at `1` and must be sequential with no gaps — if `HOSTNAME_2`
-is missing, `HOSTNAME_3` and beyond are never read.
+is missing, `HOSTNAME_3` and beyond are never read. Adding, removing, or
+renumbering a `HOSTNAME_N` entry means editing `docker-compose.yml`
+itself (`.env` only overrides values for indexes the compose file already
+declares).
 
 ### Public vs protected
 
@@ -94,13 +103,25 @@ Create a scoped token (**My Profile → API Tokens → Create Token**) with:
 - **Zone → DNS → Edit** (for the zone(s)/domains you'll use, or all zones)
 - **Zone → Zone → Read** (needed to auto-detect which zone each hostname belongs to)
 
-## Usage
+## Environment file
 
-Edit the `environment:` block in `docker-compose.yml` with your token,
-account ID, and hostnames, then:
+Rather than editing `docker-compose.yml` directly, copy [`.env.example`](.env.example)
+to `.env` next to it and fill in your real values:
 
 ```bash
-docker compose up -d --build
+cp .env.example .env
+```
+
+`docker compose` loads a `.env` file from the compose file's directory
+automatically — no extra flag needed. `.env` is already in `.gitignore`,
+so your token and other secrets never get committed.
+[`examples/queueup/.env.example`](examples/queueup/.env.example) is the
+equivalent for the QueueUp example below.
+
+## Usage
+
+```bash
+docker compose up -d
 ```
 
 `docker-compose.yml` includes a demo `whoami` service so you can see the
@@ -184,6 +205,30 @@ is gone with it** — you'll need to delete the orphaned tunnel from the
 Cloudflare dashboard (**Zero Trust → Networks → Tunnels**) and let the
 controller create a new one. Back up or avoid pruning this volume.
 
+## Versioning / Releases
+
+Images are built by [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml)
+and published to `ghcr.io/trentnbauer/tunnelmate`, following
+[semver](https://semver.org) (`MAJOR.MINOR.PATCH`), starting at `v0.1.0`:
+
+- Every push to `main` publishes/updates the `latest` tag.
+- Pushing a `vMAJOR.MINOR.PATCH` git tag (e.g. `v0.1.0`) publishes that
+  exact tag, plus floating `vMAJOR.MINOR` and `vMAJOR` tags that move to
+  point at the newest matching release — pin `TMVer` to whichever
+  precision you want:
+  - `TMVer=v0.1.0` — pinned to that exact patch release
+  - `TMVer=v0.1` — auto-updates within the `0.1.x` line
+  - `TMVer=v0` — auto-updates within the `0.x` line (pre-1.0: breaking
+    changes can still happen between minors)
+  - `TMVer=latest` (default) — always the newest build off `main`
+
+To cut a release:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## Development
 
 ```bash
@@ -194,3 +239,7 @@ pytest
 Tests cover the pure logic (env-var parsing, zone matching, ingress
 rendering, and the create/update/delete reconciliation decisions) against
 a fake Cloudflare client — no live API calls or credentials needed.
+
+To build the image locally instead of pulling from GHCR (e.g. while
+changing the `Dockerfile` or `app/` itself), swap `image:` for `build: .`
+in `docker-compose.yml` and run `docker compose up -d --build`.
