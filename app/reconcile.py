@@ -7,7 +7,10 @@ trade-off in exchange for never needing Docker-socket access at all.
 
 Two kinds of desired entries are reconciled separately:
 - routes (HOSTNAME_N with no path): own a DNS record + tunnel ingress rule,
-  and optionally a whole-hostname Access app if USERS_N is set.
+  plus a whole-hostname Access app -- an "allow" policy restricted to
+  USERS_N if set, or an explicit "bypass" policy if not. Every route always
+  gets an app so a hostname's access decision is never left to whatever
+  other Access application on the account happens to also match it.
 - path scopes (HOSTNAME_N with a path, e.g. app.example.com/admin): only
   add an Access app scoped to that path on top of an existing route -- no
   DNS or ingress changes.
@@ -62,55 +65,46 @@ def reconcile_routes(
             client.delete_access_app(entry["access_app_id"])
         del routes[hostname]
 
-    # 2. Create or update every desired route.
+    # 2. Create or update every desired route. Every route always gets its
+    #    own Access app -- "public" is an explicit bypass policy (see
+    #    cf_client._access_policy_body), not the absence of an app -- so a
+    #    hostname can never fall back to some other, unrelated Access
+    #    application already on the account (e.g. an account-wide wildcard
+    #    app) that this tool doesn't know about and doesn't manage.
     for hostname, cfg in desired_by_hostname.items():
         prev = routes.get(hostname)
-        wants_access = bool(cfg.authusers)
 
         if prev is None:
             zone = match_zone(hostname, zones)
             dns_record_id = client.create_dns_record(zone.id, hostname, target)
             log.info("created DNS record for %s in zone %s", hostname, zone.name)
+            zone_id, prev_authusers, access_app_id, access_policy_id = zone.id, None, None, None
+        else:
+            zone_id = prev["zone_id"]
+            dns_record_id = prev["dns_record_id"]
+            prev_authusers = prev.get("authusers")
+            access_app_id = prev.get("access_app_id")
+            access_policy_id = prev.get("access_policy_id")
 
-            access_app_id = access_policy_id = None
-            if wants_access:
-                access_app_id = client.create_access_app(hostname)
-                access_policy_id = client.create_access_policy(access_app_id, hostname, cfg.authusers)
-                log.info("created Access app+policy for %s", hostname)
-
-            routes[hostname] = {
-                "zone_id": zone.id,
-                "dns_record_id": dns_record_id,
-                "access_app_id": access_app_id,
-                "access_policy_id": access_policy_id,
-                "authusers": list(cfg.authusers),
-            }
-            continue
-
-        # Existing route: the DNS record never changes (always the same
-        # tunnel CNAME); only the Access app/policy can need reconciling.
-        was_protected = prev.get("access_app_id") is not None
-        changed = list(cfg.authusers) != prev.get("authusers", [])
-
-        if not was_protected and wants_access:
+        if access_app_id is None:
+            # New route, or an existing one created before every hostname
+            # got its own app -- back-fill it now.
             access_app_id = client.create_access_app(hostname)
             access_policy_id = client.create_access_policy(access_app_id, hostname, cfg.authusers)
-            log.info("added Access protection to %s", hostname)
-        elif was_protected and not wants_access:
-            client.delete_access_app(prev["access_app_id"])
-            access_app_id = access_policy_id = None
-            log.info("removed Access protection from %s (now public)", hostname)
-        elif was_protected and wants_access and changed:
-            # Update in place so the hostname is never briefly unprotected.
-            client.update_access_policy(prev["access_app_id"], prev["access_policy_id"], hostname, cfg.authusers)
-            access_app_id, access_policy_id = prev["access_app_id"], prev["access_policy_id"]
-            log.info("updated Access policy for %s", hostname)
-        else:
-            access_app_id, access_policy_id = prev.get("access_app_id"), prev.get("access_policy_id")
+            log.info(
+                "created Access app+policy for %s (%s)",
+                hostname, "protected" if cfg.authusers else "public",
+            )
+        elif list(cfg.authusers) != prev_authusers:
+            client.update_access_policy(access_app_id, access_policy_id, hostname, cfg.authusers)
+            log.info(
+                "updated Access policy for %s (%s)",
+                hostname, "protected" if cfg.authusers else "public",
+            )
 
         routes[hostname] = {
-            "zone_id": prev["zone_id"],
-            "dns_record_id": prev["dns_record_id"],
+            "zone_id": zone_id,
+            "dns_record_id": dns_record_id,
             "access_app_id": access_app_id,
             "access_policy_id": access_policy_id,
             "authusers": list(cfg.authusers),

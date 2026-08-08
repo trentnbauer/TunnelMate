@@ -125,6 +125,17 @@ class CloudflareClient:
 
 
 def _access_policy_body(domain: str, authusers: tuple) -> dict:
+    if not authusers:
+        # A "public" hostname still gets its own Access app+policy (see
+        # reconcile.py) so it takes precedence over any other Access app on
+        # the account that might otherwise also match this hostname (e.g. a
+        # wildcard app) -- bypass, not just an absent app, is what actually
+        # guarantees no login is required.
+        return {
+            "name": f"{domain}-public",
+            "decision": "bypass",
+            "include": [{"everyone": {}}],
+        }
     return {
         "name": f"{domain}-auth",
         "decision": "allow",

@@ -35,8 +35,10 @@ live as other containers start/stop.
 2. It creates a Cloudflare Tunnel via the API on first run (or reuses the
    one it created previously, persisted in the `/data` volume).
 3. For each hostname it creates a proxied DNS `CNAME` record pointing at
-   the tunnel, and — if `USERS_N` is set — a Cloudflare Access application
-   + policy restricted to those emails.
+   the tunnel, and a Cloudflare Access application + policy: restricted to
+   `USERS_N`'s emails if set, or an explicit `bypass` (public, no login)
+   policy if not — every hostname always gets its own app, "public" is
+   never just the absence of one.
 4. It writes a local `cloudflared` `config.yaml` with the ingress rules
    and `exec`s into `cloudflared tunnel run`, which becomes the
    container's PID 1.
@@ -70,12 +72,22 @@ declares).
 ### Public vs protected
 
 Whether a hostname needs login is inferred from `USERS_N`, not a separate
-flag: leave it unset for public, set it for a Cloudflare Access application
-+ policy restricted to those emails. Login uses Cloudflare Access's
-built-in email one-time-PIN login — an account-wide Zero Trust setting
+flag: leave it unset for public, set it for an `allow` policy restricted
+to those emails. Login uses Cloudflare Access's built-in email
+one-time-PIN login — an account-wide Zero Trust setting
 (**Settings → Authentication → Login methods → One-time PIN**), not
 something this tool configures — enable it once in your Cloudflare Zero
 Trust dashboard if it isn't already.
+
+Every hostname gets its own Access app either way — a "public" one gets a
+`bypass` policy instead of no app at all. This matters if you have any
+other Access application on the account with broader reach (e.g. a
+wildcard app covering `*.example.com`, or another tool's app): Cloudflare
+evaluates the most specific matching app for a given hostname, so
+TunnelMate's own exact-hostname app — `bypass` or `allow` — always wins
+for hostnames it manages, regardless of what else exists on the account.
+Without this, a "public" hostname with no app of its own would silently
+fall through to whatever broader app happens to also match it.
 
 ### Protecting just a sub-path
 

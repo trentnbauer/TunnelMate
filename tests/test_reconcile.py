@@ -59,17 +59,19 @@ def path_config(**overrides):
 
 
 class TestReconcileRoutes:
-    def test_new_public_hostname_creates_dns_only(self):
+    def test_new_public_hostname_creates_dns_and_bypass_access(self):
         client = FakeClient()
         state = {"routes": {}}
         cfg = route_config()
 
         reconcile.reconcile_routes(client, TUNNEL, [cfg], state, ZONES)
 
-        assert client.calls == [
-            ("create_dns_record", "zone-1", "app.example.com", "tunnel-1.cfargotunnel.com")
-        ]
-        assert state["routes"]["app.example.com"]["access_app_id"] is None
+        kinds = [c[0] for c in client.calls]
+        assert kinds == ["create_dns_record", "create_access_app", "create_access_policy"]
+        assert client.calls[2] == ("create_access_policy", "app-1", "app.example.com", ())
+        entry = state["routes"]["app.example.com"]
+        assert entry["access_app_id"] == "app-1"
+        assert entry["access_policy_id"] == "policy-1"
 
     def test_new_protected_hostname_creates_dns_and_access(self):
         client = FakeClient()
@@ -106,7 +108,10 @@ class TestReconcileRoutes:
         ]
         assert state["routes"] == {}
 
-    def test_public_to_protected_transition_adds_access(self):
+    def test_legacy_public_route_without_access_app_gets_backfilled(self):
+        # Pre-existing state from before every hostname always got an
+        # Access app: a public route with no app_id at all, and its own
+        # config unchanged (still public). It should still get an app now.
         client = FakeClient()
         state = {
             "routes": {
@@ -119,15 +124,38 @@ class TestReconcileRoutes:
                 }
             }
         }
-        cfg = route_config(authusers=("a@example.com",))
+        cfg = route_config()
 
         reconcile.reconcile_routes(client, TUNNEL, [cfg], state, ZONES)
 
         kinds = [c[0] for c in client.calls]
         assert kinds == ["create_access_app", "create_access_policy"]
+        assert client.calls[1] == ("create_access_policy", "app-1", "app.example.com", ())
         assert state["routes"]["app.example.com"]["access_app_id"] == "app-1"
 
-    def test_protected_to_public_transition_removes_access(self):
+    def test_public_to_protected_transition_updates_policy(self):
+        client = FakeClient()
+        state = {
+            "routes": {
+                "app.example.com": {
+                    "zone_id": "zone-1",
+                    "dns_record_id": "dns-1",
+                    "access_app_id": "app-1",
+                    "access_policy_id": "policy-1",
+                    "authusers": [],
+                }
+            }
+        }
+        cfg = route_config(authusers=("a@example.com",))
+
+        reconcile.reconcile_routes(client, TUNNEL, [cfg], state, ZONES)
+
+        assert client.calls == [
+            ("update_access_policy", "app-1", "policy-1", "app.example.com", ("a@example.com",))
+        ]
+        assert state["routes"]["app.example.com"]["access_app_id"] == "app-1"
+
+    def test_protected_to_public_transition_updates_policy_to_bypass(self):
         client = FakeClient()
         state = {
             "routes": {
@@ -144,8 +172,8 @@ class TestReconcileRoutes:
 
         reconcile.reconcile_routes(client, TUNNEL, [cfg], state, ZONES)
 
-        assert client.calls == [("delete_access_app", "app-1")]
-        assert state["routes"]["app.example.com"]["access_app_id"] is None
+        assert client.calls == [("update_access_policy", "app-1", "policy-1", "app.example.com", ())]
+        assert state["routes"]["app.example.com"]["access_app_id"] == "app-1"
 
     def test_authusers_change_updates_policy_in_place(self):
         client = FakeClient()
@@ -175,8 +203,8 @@ class TestReconcileRoutes:
                 "app.example.com": {
                     "zone_id": "zone-1",
                     "dns_record_id": "dns-1",
-                    "access_app_id": None,
-                    "access_policy_id": None,
+                    "access_app_id": "app-1",
+                    "access_policy_id": "policy-1",
                     "authusers": [],
                 }
             }
