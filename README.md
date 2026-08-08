@@ -58,7 +58,7 @@ file" below.
 | `CLOUDFLARE_ACCOUNT_ID` | yes | Your Cloudflare account ID (dashboard sidebar) |
 | `NAME` | yes | Display name for the tunnel |
 | `HOSTNAME_N` | yes, per hostname | Public FQDN, e.g. `app.example.com`, or `app.example.com/admin` to scope just that sub-path (see below) |
-| `SERVICE_N` | yes, unless `HOSTNAME_N` has a path | Where traffic for that hostname is sent, e.g. `http://app:3000` (the tunnel origin, not a URL path filter) |
+| `SERVICE_N` | yes, unless `HOSTNAME_N` has a path | Where traffic for that hostname is sent, e.g. `http://app:3000` (the tunnel origin, not a URL path filter). If `https://`, TLS cert verification on that origin hop is always skipped (see below) |
 | `USERS_N` | no | Comma-separated emails. Set it to require login for that hostname/path; leave it unset to keep it public |
 
 `N` starts at `1` and must be sequential with no gaps — if `HOSTNAME_2`
@@ -93,6 +93,16 @@ path-scoped entry:
 See the `HOSTNAME_2`/`USERS_2` pair in `docker-compose.yml` for a working
 example: `whoami.example.com` is fully public, but
 `whoami.example.com/admin` requires login.
+
+### HTTPS origins
+
+If `SERVICE_N` starts with `https://`, the generated `cloudflared` ingress
+rule always sets `originRequest.noTLSVerify: true` for that hostname --
+there's no env var to opt in or out of this. The tunnel already terminates
+TLS at the Cloudflare edge, so this only affects the last-mile hop from
+`cloudflared` to your origin container, which is almost always a
+self-signed or internal cert; requiring a verifiable one there would just
+break the common case for no real security gain on that hop.
 
 ### Required API token permissions
 

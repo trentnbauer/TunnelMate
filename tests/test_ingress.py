@@ -38,6 +38,27 @@ def test_preserves_index_order():
     assert text.index("first.example.com") < text.index("second.example.com")
 
 
+def test_https_service_gets_no_tls_verify():
+    hostnames = [
+        route(1, "app.example.com", "https://app:8443"),
+        route(2, "other.example.com", "http://other:80"),
+    ]
+    text = render("id", "/data/credentials.json", hostnames)
+
+    assert text.splitlines() == [
+        "tunnel: id",
+        "credentials-file: /data/credentials.json",
+        "ingress:",
+        "  - hostname: app.example.com",
+        "    service: https://app:8443",
+        "    originRequest:",
+        "      noTLSVerify: true",
+        "  - hostname: other.example.com",
+        "    service: http://other:80",
+        "  - service: http_status:404",
+    ]
+
+
 def test_path_scoped_entries_are_not_rendered_as_ingress_rules():
     hostnames = [
         route(1, "app.example.com", "http://app:3000"),
