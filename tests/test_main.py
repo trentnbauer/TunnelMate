@@ -1,3 +1,6 @@
+import logging
+import signal
+
 import pytest
 
 from app import main as main_mod
@@ -74,3 +77,124 @@ class TestRoutingTableLines:
         # Every line (including content rows) is the same width -- a
         # ragged box reads as broken, not just ugly.
         assert len({len(row) for row in lines}) == 1
+
+
+class TestWaitUntilReady:
+    def test_returns_true_once_check_ready_succeeds(self):
+        calls = []
+
+        def check_ready():
+            calls.append(1)
+            return len(calls) >= 2  # not ready on the first poll, ready on the second
+
+        result = main_mod._wait_until_ready(
+            is_alive=lambda: True, check_ready=check_ready, timeout=5, poll_interval=0
+        )
+        assert result is True
+        assert len(calls) == 2
+
+    def test_returns_false_if_process_exits_before_ready(self):
+        result = main_mod._wait_until_ready(
+            is_alive=lambda: False, check_ready=lambda: False, timeout=5, poll_interval=0
+        )
+        assert result is False
+
+    def test_returns_false_on_timeout(self):
+        result = main_mod._wait_until_ready(
+            is_alive=lambda: True, check_ready=lambda: False, timeout=0.05, poll_interval=0.01
+        )
+        assert result is False
+
+
+class _FakeProc:
+    def __init__(self, returncode=0):
+        self._returncode = returncode
+        self.signals_received = []
+
+    def poll(self):
+        return None  # still running
+
+    def send_signal(self, signum):
+        self.signals_received.append(signum)
+
+    def wait(self):
+        return self._returncode
+
+
+class _FakeCompletedProcess:
+    def __init__(self, returncode):
+        self.returncode = returncode
+
+
+class TestRunCloudflared:
+    """subprocess.Popen/run and signal.signal are all monkeypatched here --
+    this never spawns a real process or touches this test process's actual
+    OS signal handlers.
+    """
+
+    def test_spawns_cloudflared_with_no_autoupdate(self, monkeypatch):
+        captured = {}
+
+        def fake_popen(args, **kw):
+            captured["args"] = args
+            return _FakeProc(returncode=0)
+
+        monkeypatch.setattr(main_mod.subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(main_mod.subprocess, "run", lambda *a, **kw: _FakeCompletedProcess(0))
+        monkeypatch.setattr(main_mod.signal, "signal", lambda *a, **kw: None)
+
+        main_mod.run_cloudflared("mytunnel", [], logging.getLogger("test"))
+
+        assert captured["args"] == [
+            "cloudflared",
+            "tunnel",
+            "--config",
+            main_mod.CONFIG_PATH,
+            "--no-autoupdate",
+            "run",
+            "mytunnel",
+        ]
+
+    def test_logs_routing_table_once_ready(self, monkeypatch, caplog):
+        monkeypatch.setattr(main_mod.subprocess, "Popen", lambda *a, **kw: _FakeProc(returncode=0))
+        monkeypatch.setattr(main_mod.subprocess, "run", lambda *a, **kw: _FakeCompletedProcess(0))
+        monkeypatch.setattr(main_mod.signal, "signal", lambda *a, **kw: None)
+
+        routes = [HostnameConfig(1, "app.example.com", None, "http://app:3000", ())]
+        with caplog.at_level("INFO"):
+            code = main_mod.run_cloudflared("mytunnel", routes, logging.getLogger("test"))
+
+        assert code == 0
+        assert any("TUNNELMATE ROUTES" in r.getMessage() for r in caplog.records)
+
+    def test_skips_routing_table_when_never_ready(self, monkeypatch, caplog):
+        monkeypatch.setattr(main_mod.subprocess, "Popen", lambda *a, **kw: _FakeProc(returncode=1))
+        monkeypatch.setattr(main_mod.subprocess, "run", lambda *a, **kw: _FakeCompletedProcess(1))
+        monkeypatch.setattr(main_mod.signal, "signal", lambda *a, **kw: None)
+        monkeypatch.setattr(main_mod, "READY_TIMEOUT_SECONDS", 0.05)
+        monkeypatch.setattr(main_mod, "READY_POLL_INTERVAL_SECONDS", 0.01)
+
+        routes = [HostnameConfig(1, "app.example.com", None, "http://app:3000", ())]
+        with caplog.at_level("INFO"):
+            code = main_mod.run_cloudflared("mytunnel", routes, logging.getLogger("test"))
+
+        assert code == 1
+        assert not any("TUNNELMATE ROUTES" in r.getMessage() for r in caplog.records)
+        assert any("did not report ready" in r.getMessage() for r in caplog.records)
+
+    def test_forwards_signals_to_the_child_process(self, monkeypatch):
+        fake_proc = _FakeProc(returncode=0)
+        monkeypatch.setattr(main_mod.subprocess, "Popen", lambda *a, **kw: fake_proc)
+        monkeypatch.setattr(main_mod.subprocess, "run", lambda *a, **kw: _FakeCompletedProcess(0))
+
+        registered = {}
+        monkeypatch.setattr(main_mod.signal, "signal", lambda sig, handler: registered.__setitem__(sig, handler))
+
+        main_mod.run_cloudflared("mytunnel", [], logging.getLogger("test"))
+
+        assert signal.SIGTERM in registered
+        assert signal.SIGINT in registered
+        # Simulate the OS delivering SIGTERM without touching any real
+        # signal handler -- just call what was registered, directly.
+        registered[signal.SIGTERM](signal.SIGTERM, None)
+        assert fake_proc.signals_received == [signal.SIGTERM]
