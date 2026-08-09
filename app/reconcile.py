@@ -19,6 +19,7 @@ Two kinds of desired entries are reconciled separately:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from . import ingress
 from .cf_client import CloudflareClient
@@ -28,6 +29,10 @@ from .zones import match as match_zone
 log = logging.getLogger(__name__)
 
 TUNNEL_CNAME_SUFFIX = "cfargotunnel.com"
+
+# No-op default so existing callers (and tests) that don't care about
+# incremental persistence don't need to pass anything.
+_NO_PERSIST: Callable[[], None] = lambda: None  # noqa: E731
 
 
 def reconcile_tunnel(client: CloudflareClient, global_cfg: GlobalConfig, state: dict) -> dict:
@@ -47,13 +52,23 @@ def reconcile_routes(
     desired: list[HostnameConfig],
     state: dict,
     zones,
+    persist: Callable[[], None] = _NO_PERSIST,
 ) -> None:
+    """`persist` is called after each individual Cloudflare mutation so
+    state.json never lags behind what's actually on Cloudflare -- if a
+    later hostname's API call fails, everything already applied this run
+    stays durable and won't be re-applied (and error out as "already
+    exists"/404) on the next restart.
+    """
     desired_by_hostname = {cfg.hostname: cfg for cfg in desired}
     routes = state["routes"]
     target = f"{tunnel['id']}.{TUNNEL_CNAME_SUFFIX}"
 
     # 1. Prune routes that disappeared from config -- only ever touches
     #    resources this tool itself created and recorded in state.json.
+    #    Each deleted resource is cleared from the entry and persisted
+    #    immediately, so a failure partway through a hostname's removal
+    #    doesn't retry a delete against an already-deleted resource.
     for hostname in list(routes):
         if hostname in desired_by_hostname:
             continue
@@ -61,9 +76,14 @@ def reconcile_routes(
         log.info("removing route %s (no longer in config)", hostname)
         if entry.get("dns_record_id"):
             client.delete_dns_record(entry["zone_id"], entry["dns_record_id"])
+            entry["dns_record_id"] = None
+            persist()
         if entry.get("access_app_id"):
             client.delete_access_app(entry["access_app_id"])
+            entry["access_app_id"] = None
+            persist()
         del routes[hostname]
+        persist()
 
     # 2. Create or update every desired route. Every route always gets its
     #    own Access app -- "public" is an explicit bypass policy (see
@@ -78,13 +98,24 @@ def reconcile_routes(
             zone = match_zone(hostname, zones)
             dns_record_id = client.create_dns_record(zone.id, hostname, target)
             log.info("created DNS record for %s in zone %s", hostname, zone.name)
-            zone_id, prev_authusers, access_app_id, access_policy_id = zone.id, None, None, None
-        else:
-            zone_id = prev["zone_id"]
-            dns_record_id = prev["dns_record_id"]
-            prev_authusers = prev.get("authusers")
-            access_app_id = prev.get("access_app_id")
-            access_policy_id = prev.get("access_policy_id")
+            # Persist right away: if Access app creation below fails, a
+            # retry must back-fill the app rather than re-create this DNS
+            # record (which already exists on Cloudflare now).
+            routes[hostname] = {
+                "zone_id": zone.id,
+                "dns_record_id": dns_record_id,
+                "access_app_id": None,
+                "access_policy_id": None,
+                "authusers": list(cfg.authusers),
+            }
+            persist()
+            prev = routes[hostname]
+
+        zone_id = prev["zone_id"]
+        dns_record_id = prev["dns_record_id"]
+        prev_authusers = prev.get("authusers")
+        access_app_id = prev.get("access_app_id")
+        access_policy_id = prev.get("access_policy_id")
 
         if access_app_id is None:
             # New route, or an existing one created before every hostname
@@ -109,9 +140,15 @@ def reconcile_routes(
             "access_policy_id": access_policy_id,
             "authusers": list(cfg.authusers),
         }
+        persist()
 
 
-def reconcile_path_scopes(client: CloudflareClient, desired: list[HostnameConfig], state: dict) -> None:
+def reconcile_path_scopes(
+    client: CloudflareClient,
+    desired: list[HostnameConfig],
+    state: dict,
+    persist: Callable[[], None] = _NO_PERSIST,
+) -> None:
     desired_by_key = {cfg.scope_key: cfg for cfg in desired}
     path_scopes = state["path_scopes"]
 
@@ -123,32 +160,37 @@ def reconcile_path_scopes(client: CloudflareClient, desired: list[HostnameConfig
         log.info("removing path scope %s (no longer in config)", key)
         client.delete_access_app(entry["access_app_id"])
         del path_scopes[key]
+        persist()
 
     # 2. Create or update every desired path scope. Every entry here always
     #    has authusers (config.py rejects a path-scoped entry without them).
     for key, cfg in desired_by_key.items():
         prev = path_scopes.get(key)
+        access_app_id = prev.get("access_app_id") if prev else None
+        access_policy_id = prev.get("access_policy_id") if prev else None
+        prev_authusers = prev.get("authusers") if prev else None
 
-        if prev is None:
+        if access_app_id is None:
             access_app_id = client.create_access_app(key)
+            # Persist right away: if policy creation below fails, a retry
+            # must back-fill the policy rather than create a second,
+            # orphaned Access app for this path scope.
+            path_scopes[key] = {"access_app_id": access_app_id, "access_policy_id": None, "authusers": []}
+            persist()
+
+        if access_policy_id is None:
             access_policy_id = client.create_access_policy(access_app_id, key, cfg.authusers)
             log.info("created Access app+policy for path scope %s", key)
-            path_scopes[key] = {
-                "access_app_id": access_app_id,
-                "access_policy_id": access_policy_id,
-                "authusers": list(cfg.authusers),
-            }
-            continue
-
-        if list(cfg.authusers) != prev.get("authusers", []):
-            client.update_access_policy(prev["access_app_id"], prev["access_policy_id"], key, cfg.authusers)
+        elif list(cfg.authusers) != prev_authusers:
+            client.update_access_policy(access_app_id, access_policy_id, key, cfg.authusers)
             log.info("updated Access policy for path scope %s", key)
 
         path_scopes[key] = {
-            "access_app_id": prev["access_app_id"],
-            "access_policy_id": prev["access_policy_id"],
+            "access_app_id": access_app_id,
+            "access_policy_id": access_policy_id,
             "authusers": list(cfg.authusers),
         }
+        persist()
 
 
 def render_local_config(tunnel: dict, credentials_path: str, desired: list[HostnameConfig]) -> str:

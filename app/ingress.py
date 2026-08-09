@@ -6,20 +6,30 @@ all values are already validated in config.py before reaching here.
 
 from __future__ import annotations
 
+import json
+
 from .config import HostnameConfig
+
+
+def _yaml_str(value: str) -> str:
+    # A YAML double-quoted scalar uses the same escaping rules as JSON, so
+    # json.dumps is a safe, dependency-free way to quote hostname/service
+    # values -- guards against '#', ': ', leading '-'/'*', etc. breaking
+    # the hand-templated YAML below.
+    return json.dumps(value)
 
 
 def render(tunnel_id: str, credentials_path: str, hostnames: list[HostnameConfig]) -> str:
     lines = [
         f"tunnel: {tunnel_id}",
-        f"credentials-file: {credentials_path}",
+        f"credentials-file: {_yaml_str(credentials_path)}",
         "ingress:",
     ]
     for cfg in hostnames:
         if not cfg.is_route:
             continue  # path-scoped entries reuse their base route's ingress rule
-        lines.append(f"  - hostname: {cfg.hostname}")
-        lines.append(f"    service: {cfg.service}")
+        lines.append(f"  - hostname: {_yaml_str(cfg.hostname)}")
+        lines.append(f"    service: {_yaml_str(cfg.service)}")
         if cfg.service.startswith("https://"):
             # The tunnel already terminates TLS at the Cloudflare edge, so
             # this is just the last-mile hop to the origin container --

@@ -1,38 +1,57 @@
+import pytest
+
 from app import reconcile
 from app.config import HostnameConfig
 from app.zones import Zone
 
 
 class FakeClient:
-    """Records calls instead of hitting the network."""
+    """Records calls instead of hitting the network.
 
-    def __init__(self):
+    `fail_on` maps a call name to an exception to raise the first (and
+    only) time that call is made -- used to simulate a Cloudflare API call
+    failing partway through a reconcile run, without recording it in
+    `calls` (a failed call has no lasting effect to assert on).
+    """
+
+    def __init__(self, fail_on=None):
         self.calls = []
         self._counters = {}
+        self._fail_on = dict(fail_on or {})
 
     def _id(self, prefix):
         self._counters[prefix] = self._counters.get(prefix, 0) + 1
         return f"{prefix}-{self._counters[prefix]}"
 
+    def _maybe_fail(self, name):
+        if name in self._fail_on:
+            raise self._fail_on.pop(name)
+
     def create_dns_record(self, zone_id, hostname, target):
+        self._maybe_fail("create_dns_record")
         self.calls.append(("create_dns_record", zone_id, hostname, target))
         return self._id("dns")
 
     def delete_dns_record(self, zone_id, record_id):
+        self._maybe_fail("delete_dns_record")
         self.calls.append(("delete_dns_record", zone_id, record_id))
 
     def create_access_app(self, domain):
+        self._maybe_fail("create_access_app")
         self.calls.append(("create_access_app", domain))
         return self._id("app")
 
     def delete_access_app(self, app_id):
+        self._maybe_fail("delete_access_app")
         self.calls.append(("delete_access_app", app_id))
 
     def create_access_policy(self, app_id, domain, authusers):
+        self._maybe_fail("create_access_policy")
         self.calls.append(("create_access_policy", app_id, domain, authusers))
         return self._id("policy")
 
     def update_access_policy(self, app_id, policy_id, domain, authusers):
+        self._maybe_fail("update_access_policy")
         self.calls.append(("update_access_policy", app_id, policy_id, domain, authusers))
 
 
@@ -215,6 +234,73 @@ class TestReconcileRoutes:
 
         assert client.calls == []
 
+    def test_persist_called_after_each_mutation_for_a_new_route(self):
+        snapshots = []
+        client = FakeClient()
+        state = {"routes": {}}
+        cfg = route_config(authusers=("a@example.com",))
+
+        reconcile.reconcile_routes(
+            client, TUNNEL, [cfg], state, ZONES, persist=lambda: snapshots.append(dict(state["routes"]))
+        )
+
+        # Once right after the DNS record is created, once after the
+        # Access app+policy completes the route.
+        assert len(snapshots) == 2
+        assert snapshots[0]["app.example.com"]["access_app_id"] is None
+        assert snapshots[1]["app.example.com"]["access_app_id"] == "app-1"
+
+    def test_retry_after_access_app_failure_does_not_recreate_dns(self):
+        state = {"routes": {}}
+        cfg = route_config(authusers=("a@example.com",))
+
+        client = FakeClient(fail_on={"create_access_app": RuntimeError("boom")})
+        with pytest.raises(RuntimeError):
+            reconcile.reconcile_routes(client, TUNNEL, [cfg], state, ZONES)
+
+        assert client.calls == [
+            ("create_dns_record", "zone-1", "app.example.com", "tunnel-1.cfargotunnel.com")
+        ]
+        entry = state["routes"]["app.example.com"]
+        assert entry["dns_record_id"] == "dns-1"
+        assert entry["access_app_id"] is None
+
+        # Retry with a fresh client/call log: the already-persisted DNS
+        # record must not be recreated, only the missing Access app+policy.
+        retry_client = FakeClient()
+        reconcile.reconcile_routes(retry_client, TUNNEL, [cfg], state, ZONES)
+
+        assert [c[0] for c in retry_client.calls] == ["create_access_app", "create_access_policy"]
+        assert state["routes"]["app.example.com"]["dns_record_id"] == "dns-1"
+
+    def test_retry_after_partial_prune_failure_does_not_redelete_dns(self):
+        state = {
+            "routes": {
+                "gone.example.com": {
+                    "zone_id": "zone-1",
+                    "dns_record_id": "dns-1",
+                    "access_app_id": "app-1",
+                    "access_policy_id": "policy-1",
+                    "authusers": [],
+                }
+            }
+        }
+
+        client = FakeClient(fail_on={"delete_access_app": RuntimeError("boom")})
+        with pytest.raises(RuntimeError):
+            reconcile.reconcile_routes(client, TUNNEL, [], state, ZONES)
+
+        assert client.calls == [("delete_dns_record", "zone-1", "dns-1")]
+        entry = state["routes"]["gone.example.com"]
+        assert entry["dns_record_id"] is None
+        assert entry["access_app_id"] == "app-1"  # not yet deleted
+
+        retry_client = FakeClient()
+        reconcile.reconcile_routes(retry_client, TUNNEL, [], state, ZONES)
+
+        assert retry_client.calls == [("delete_access_app", "app-1")]
+        assert state["routes"] == {}
+
 
 class TestReconcilePathScopes:
     def test_new_path_scope_creates_access_only(self):
@@ -283,6 +369,26 @@ class TestReconcilePathScopes:
         reconcile.reconcile_path_scopes(client, [cfg], state)
 
         assert client.calls == []
+
+    def test_retry_after_policy_failure_does_not_recreate_app(self):
+        state = {"path_scopes": {}}
+        cfg = path_config()
+
+        client = FakeClient(fail_on={"create_access_policy": RuntimeError("boom")})
+        with pytest.raises(RuntimeError):
+            reconcile.reconcile_path_scopes(client, [cfg], state)
+
+        assert client.calls == [("create_access_app", "app.example.com/admin")]
+        entry = state["path_scopes"]["app.example.com/admin"]
+        assert entry["access_app_id"] == "app-1"
+        assert entry["access_policy_id"] is None
+
+        retry_client = FakeClient()
+        reconcile.reconcile_path_scopes(retry_client, [cfg], state)
+
+        assert retry_client.calls == [
+            ("create_access_policy", "app-1", "app.example.com/admin", ("a@example.com",))
+        ]
 
 
 def test_reconcile_tunnel_reuses_persisted_identity():

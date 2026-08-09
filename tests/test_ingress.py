@@ -19,12 +19,12 @@ def test_renders_ingress_with_catchall():
 
     assert text.splitlines() == [
         "tunnel: tunnel-id-123",
-        "credentials-file: /data/credentials.json",
+        'credentials-file: "/data/credentials.json"',
         "ingress:",
-        "  - hostname: app.example.com",
-        "    service: http://app:3000",
-        "  - hostname: admin.example.com",
-        "    service: http://admin:8080",
+        '  - hostname: "app.example.com"',
+        '    service: "http://app:3000"',
+        '  - hostname: "admin.example.com"',
+        '    service: "http://admin:8080"',
         "  - service: http_status:404",
     ]
 
@@ -47,14 +47,14 @@ def test_https_service_gets_no_tls_verify():
 
     assert text.splitlines() == [
         "tunnel: id",
-        "credentials-file: /data/credentials.json",
+        'credentials-file: "/data/credentials.json"',
         "ingress:",
-        "  - hostname: app.example.com",
-        "    service: https://app:8443",
+        '  - hostname: "app.example.com"',
+        '    service: "https://app:8443"',
         "    originRequest:",
         "      noTLSVerify: true",
-        "  - hostname: other.example.com",
-        "    service: http://other:80",
+        '  - hostname: "other.example.com"',
+        '    service: "http://other:80"',
         "  - service: http_status:404",
     ]
 
@@ -68,9 +68,19 @@ def test_path_scoped_entries_are_not_rendered_as_ingress_rules():
 
     assert text.splitlines() == [
         "tunnel: id",
-        "credentials-file: /data/credentials.json",
+        'credentials-file: "/data/credentials.json"',
         "ingress:",
-        "  - hostname: app.example.com",
-        "    service: http://app:3000",
+        '  - hostname: "app.example.com"',
+        '    service: "http://app:3000"',
         "  - service: http_status:404",
     ]
+
+
+def test_special_characters_are_safely_quoted():
+    # A hostname/service containing YAML-significant characters (colon
+    # followed by space, a '#') must not break the generated document or
+    # get truncated as a comment.
+    hostnames = [route(1, "app.example.com", "http://app:3000/path#frag")]
+    text = render("id", "/data/credentials.json", hostnames)
+
+    assert '    service: "http://app:3000/path#frag"' in text.splitlines()
