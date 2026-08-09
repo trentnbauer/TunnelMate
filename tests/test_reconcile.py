@@ -36,10 +36,14 @@ class FakeClient:
         self._maybe_fail("delete_dns_record")
         self.calls.append(("delete_dns_record", zone_id, record_id))
 
-    def create_access_app(self, domain):
+    def create_access_app(self, domain, name=None):
         self._maybe_fail("create_access_app")
-        self.calls.append(("create_access_app", domain))
+        self.calls.append(("create_access_app", domain, name or domain))
         return self._id("app")
+
+    def update_access_app(self, app_id, domain, name):
+        self._maybe_fail("update_access_app")
+        self.calls.append(("update_access_app", app_id, domain, name))
 
     def delete_access_app(self, app_id):
         self._maybe_fail("delete_access_app")
@@ -87,10 +91,12 @@ class TestReconcileRoutes:
 
         kinds = [c[0] for c in client.calls]
         assert kinds == ["create_dns_record", "create_access_app", "create_access_policy"]
+        assert client.calls[1] == ("create_access_app", "app.example.com", "app.example.com")
         assert client.calls[2] == ("create_access_policy", "app-1", "app.example.com", ())
         entry = state["routes"]["app.example.com"]
         assert entry["access_app_id"] == "app-1"
         assert entry["access_policy_id"] == "policy-1"
+        assert entry["app_name"] == "app.example.com"
 
     def test_new_protected_hostname_creates_dns_and_access(self):
         client = FakeClient()
@@ -104,6 +110,16 @@ class TestReconcileRoutes:
         entry = state["routes"]["app.example.com"]
         assert entry["access_app_id"] == "app-1"
         assert entry["access_policy_id"] == "policy-1"
+
+    def test_new_hostname_with_app_name_override_uses_it(self):
+        client = FakeClient()
+        state = {"routes": {}}
+        cfg = route_config(app_name="My App")
+
+        reconcile.reconcile_routes(client, TUNNEL, [cfg], state, ZONES)
+
+        assert client.calls[1] == ("create_access_app", "app.example.com", "My App")
+        assert state["routes"]["app.example.com"]["app_name"] == "My App"
 
     def test_removed_hostname_is_pruned(self):
         client = FakeClient()
@@ -162,6 +178,7 @@ class TestReconcileRoutes:
                     "access_app_id": "app-1",
                     "access_policy_id": "policy-1",
                     "authusers": [],
+                    "app_name": "app.example.com",
                 }
             }
         }
@@ -184,6 +201,7 @@ class TestReconcileRoutes:
                     "access_app_id": "app-1",
                     "access_policy_id": "policy-1",
                     "authusers": ["a@example.com"],
+                    "app_name": "app.example.com",
                 }
             }
         }
@@ -204,6 +222,7 @@ class TestReconcileRoutes:
                     "access_app_id": "app-1",
                     "access_policy_id": "policy-1",
                     "authusers": ["a@example.com"],
+                    "app_name": "app.example.com",
                 }
             }
         }
@@ -215,6 +234,27 @@ class TestReconcileRoutes:
             ("update_access_policy", "app-1", "policy-1", "app.example.com", ("a@example.com", "b@example.com"))
         ]
 
+    def test_app_name_change_updates_access_app_in_place(self):
+        client = FakeClient()
+        state = {
+            "routes": {
+                "app.example.com": {
+                    "zone_id": "zone-1",
+                    "dns_record_id": "dns-1",
+                    "access_app_id": "app-1",
+                    "access_policy_id": "policy-1",
+                    "authusers": [],
+                    "app_name": "app.example.com",
+                }
+            }
+        }
+        cfg = route_config(app_name="New Display Name")
+
+        reconcile.reconcile_routes(client, TUNNEL, [cfg], state, ZONES)
+
+        assert client.calls == [("update_access_app", "app-1", "app.example.com", "New Display Name")]
+        assert state["routes"]["app.example.com"]["app_name"] == "New Display Name"
+
     def test_service_only_change_makes_no_cloudflare_calls(self):
         client = FakeClient()
         state = {
@@ -225,6 +265,7 @@ class TestReconcileRoutes:
                     "access_app_id": "app-1",
                     "access_policy_id": "policy-1",
                     "authusers": [],
+                    "app_name": "app.example.com",
                 }
             }
         }
@@ -311,11 +352,12 @@ class TestReconcilePathScopes:
         reconcile.reconcile_path_scopes(client, [cfg], state)
 
         assert client.calls == [
-            ("create_access_app", "app.example.com/admin"),
+            ("create_access_app", "app.example.com/admin", "app.example.com/admin"),
             ("create_access_policy", "app-1", "app.example.com/admin", ("a@example.com",)),
         ]
         entry = state["path_scopes"]["app.example.com/admin"]
         assert entry["access_app_id"] == "app-1"
+        assert entry["app_name"] == "app.example.com/admin"
 
     def test_removed_path_scope_is_pruned(self):
         client = FakeClient()
@@ -342,6 +384,7 @@ class TestReconcilePathScopes:
                     "access_app_id": "app-1",
                     "access_policy_id": "policy-1",
                     "authusers": ["a@example.com"],
+                    "app_name": "app.example.com/admin",
                 }
             }
         }
@@ -353,6 +396,25 @@ class TestReconcilePathScopes:
             ("update_access_policy", "app-1", "policy-1", "app.example.com/admin", ("a@example.com", "b@example.com"))
         ]
 
+    def test_app_name_change_updates_access_app_in_place(self):
+        client = FakeClient()
+        state = {
+            "path_scopes": {
+                "app.example.com/admin": {
+                    "access_app_id": "app-1",
+                    "access_policy_id": "policy-1",
+                    "authusers": ["a@example.com"],
+                    "app_name": "app.example.com/admin",
+                }
+            }
+        }
+        cfg = path_config(app_name="Admin Panel")
+
+        reconcile.reconcile_path_scopes(client, [cfg], state)
+
+        assert client.calls == [("update_access_app", "app-1", "app.example.com/admin", "Admin Panel")]
+        assert state["path_scopes"]["app.example.com/admin"]["app_name"] == "Admin Panel"
+
     def test_unchanged_path_scope_makes_no_calls(self):
         client = FakeClient()
         state = {
@@ -361,6 +423,7 @@ class TestReconcilePathScopes:
                     "access_app_id": "app-1",
                     "access_policy_id": "policy-1",
                     "authusers": ["a@example.com"],
+                    "app_name": "app.example.com/admin",
                 }
             }
         }
@@ -378,7 +441,7 @@ class TestReconcilePathScopes:
         with pytest.raises(RuntimeError):
             reconcile.reconcile_path_scopes(client, [cfg], state)
 
-        assert client.calls == [("create_access_app", "app.example.com/admin")]
+        assert client.calls == [("create_access_app", "app.example.com/admin", "app.example.com/admin")]
         entry = state["path_scopes"]["app.example.com/admin"]
         assert entry["access_app_id"] == "app-1"
         assert entry["access_policy_id"] is None

@@ -14,9 +14,12 @@ services:
 
       # Hostname 2: same app, but /admin is locked down to just these emails.
       # No SERVICE_2 -- this reuses HOSTNAME_1's route, it just adds an
-      # Access policy scoped to that path.
+      # Access policy scoped to that path. APP_NAME_2 is what shows on the
+      # Cloudflare Access login page instead of the raw hostname/path --
+      # optional, omit it to just show whoami.example.com/admin.
       HOSTNAME_2: ${HOSTNAME_2:-whoami.example.com/admin}
       USERS_2: ${USERS_2:-you@example.com,teammate@example.com}
+      APP_NAME_2: ${APP_NAME_2:-Whoami Admin}
 
       # Add more hostnames by continuing the sequence with no gaps, e.g.:
       # HOSTNAME_3: another.example.com

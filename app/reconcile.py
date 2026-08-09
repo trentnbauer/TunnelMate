@@ -107,6 +107,7 @@ def reconcile_routes(
                 "access_app_id": None,
                 "access_policy_id": None,
                 "authusers": list(cfg.authusers),
+                "app_name": None,
             }
             persist()
             prev = routes[hostname]
@@ -114,24 +115,29 @@ def reconcile_routes(
         zone_id = prev["zone_id"]
         dns_record_id = prev["dns_record_id"]
         prev_authusers = prev.get("authusers")
+        prev_app_name = prev.get("app_name")
         access_app_id = prev.get("access_app_id")
         access_policy_id = prev.get("access_policy_id")
 
         if access_app_id is None:
             # New route, or an existing one created before every hostname
             # got its own app -- back-fill it now.
-            access_app_id = client.create_access_app(hostname)
+            access_app_id = client.create_access_app(hostname, name=cfg.display_name)
             access_policy_id = client.create_access_policy(access_app_id, hostname, cfg.authusers)
             log.info(
                 "created Access app+policy for %s (%s)",
                 hostname, "protected" if cfg.authusers else "public",
             )
-        elif list(cfg.authusers) != prev_authusers:
-            client.update_access_policy(access_app_id, access_policy_id, hostname, cfg.authusers)
-            log.info(
-                "updated Access policy for %s (%s)",
-                hostname, "protected" if cfg.authusers else "public",
-            )
+        else:
+            if cfg.display_name != prev_app_name:
+                client.update_access_app(access_app_id, hostname, cfg.display_name)
+                log.info("updated Access app display name for %s to %r", hostname, cfg.display_name)
+            if list(cfg.authusers) != prev_authusers:
+                client.update_access_policy(access_app_id, access_policy_id, hostname, cfg.authusers)
+                log.info(
+                    "updated Access policy for %s (%s)",
+                    hostname, "protected" if cfg.authusers else "public",
+                )
 
         routes[hostname] = {
             "zone_id": zone_id,
@@ -139,6 +145,7 @@ def reconcile_routes(
             "access_app_id": access_app_id,
             "access_policy_id": access_policy_id,
             "authusers": list(cfg.authusers),
+            "app_name": cfg.display_name,
         }
         persist()
 
@@ -169,14 +176,23 @@ def reconcile_path_scopes(
         access_app_id = prev.get("access_app_id") if prev else None
         access_policy_id = prev.get("access_policy_id") if prev else None
         prev_authusers = prev.get("authusers") if prev else None
+        prev_app_name = prev.get("app_name") if prev else None
 
         if access_app_id is None:
-            access_app_id = client.create_access_app(key)
+            access_app_id = client.create_access_app(key, name=cfg.display_name)
             # Persist right away: if policy creation below fails, a retry
             # must back-fill the policy rather than create a second,
             # orphaned Access app for this path scope.
-            path_scopes[key] = {"access_app_id": access_app_id, "access_policy_id": None, "authusers": []}
+            path_scopes[key] = {
+                "access_app_id": access_app_id,
+                "access_policy_id": None,
+                "authusers": [],
+                "app_name": cfg.display_name,
+            }
             persist()
+        elif cfg.display_name != prev_app_name:
+            client.update_access_app(access_app_id, key, cfg.display_name)
+            log.info("updated Access app display name for path scope %s to %r", key, cfg.display_name)
 
         if access_policy_id is None:
             access_policy_id = client.create_access_policy(access_app_id, key, cfg.authusers)
@@ -189,6 +205,7 @@ def reconcile_path_scopes(
             "access_app_id": access_app_id,
             "access_policy_id": access_policy_id,
             "authusers": list(cfg.authusers),
+            "app_name": cfg.display_name,
         }
         persist()
 

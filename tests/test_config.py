@@ -28,6 +28,24 @@ def test_users_set_means_protected():
     assert configs[0].authusers == ("a@example.com", "b@example.com")
 
 
+def test_app_name_defaults_to_scope_key():
+    configs = parse_hostnames(base_env())
+    assert configs[0].app_name is None
+    assert configs[0].display_name == "app.example.com"
+
+
+def test_app_name_override():
+    configs = parse_hostnames(base_env(APP_NAME_1="My App"))
+    assert configs[0].app_name == "My App"
+    assert configs[0].display_name == "My App"
+
+
+def test_app_name_blank_falls_back_to_default():
+    configs = parse_hostnames(base_env(APP_NAME_1="   "))
+    assert configs[0].app_name is None
+    assert configs[0].display_name == "app.example.com"
+
+
 def test_stops_at_first_gap():
     env = base_env(**{"HOSTNAME_3": "gap.example.com", "SERVICE_3": "http://gap:80"})
     configs = parse_hostnames(env)
@@ -119,6 +137,11 @@ class TestPathScopes:
         assert path_cfg.service is None
         assert path_cfg.scope_key == "app.example.com/admin"
         assert path_cfg.authusers == ("a@example.com",)
+        assert path_cfg.display_name == "app.example.com/admin"
+
+    def test_path_scoped_entry_app_name_override(self):
+        configs = parse_hostnames(self.base_with_path(APP_NAME_2="Admin Panel"))
+        assert configs[1].display_name == "Admin Panel"
 
     def test_path_scope_without_users_raises(self):
         env = self.base_with_path()
