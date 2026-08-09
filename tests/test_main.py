@@ -2,6 +2,7 @@ import pytest
 
 from app import main as main_mod
 from app.cf_client import CloudflareAPIError
+from app.config import HostnameConfig
 from app.zones import Zone
 
 
@@ -52,3 +53,24 @@ def test_reconcile_failure_logs_one_clean_line_and_exits(tmp_path, monkeypatch, 
     # No traceback text (e.g. "Traceback (most recent call last)") leaked
     # into the log record itself.
     assert "Traceback" not in message
+
+
+class TestRoutingTableLines:
+    def test_empty_routes_produces_no_box(self):
+        assert main_mod._routing_table_lines([]) == []
+
+    def test_box_is_bordered_and_contains_each_route(self):
+        routes = [
+            HostnameConfig(1, "app.example.com", None, "http://app:3000", ()),
+            HostnameConfig(2, "admin.example.com", None, "http://admin:8080", ("a@example.com",)),
+        ]
+        lines = main_mod._routing_table_lines(routes)
+
+        assert lines[0] == lines[2] == lines[-1]  # top border, title separator, bottom border match
+        assert lines[0].startswith("+") and lines[0].endswith("+")
+        assert "TUNNELMATE ROUTES" in lines[1]
+        assert any("https://app.example.com" in row and "http://app:3000" in row for row in lines)
+        assert any("https://admin.example.com" in row and "http://admin:8080" in row for row in lines)
+        # Every line (including content rows) is the same width -- a
+        # ragged box reads as broken, not just ugly.
+        assert len({len(row) for row in lines}) == 1

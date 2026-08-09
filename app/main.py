@@ -19,6 +19,28 @@ CREDENTIALS_PATH = os.path.join(DATA_DIR, "credentials.json")
 CONFIG_PATH = os.path.join(DATA_DIR, "config.yaml")
 
 
+def _routing_table_lines(routes: list) -> list[str]:
+    """A bordered summary of the actual routing table, one log line per
+    row -- matching cloudflared's own boxed "CONNECTIVITY PRE-CHECKS"
+    banner style (each line logged separately, not one multi-line
+    message) so it reads as a natural continuation of the same log
+    stream once cloudflared's own logs start below it.
+    """
+    if not routes:
+        return []
+    title = "TUNNELMATE ROUTES"
+    rows = [f"https://{cfg.hostname}  -->  {cfg.service}" for cfg in routes]
+    width = max(len(title), *(len(row) for row in rows))
+    lines = [
+        "+" + "-" * (width + 2) + "+",
+        "|" + title.center(width + 2) + "|",
+        "+" + "-" * (width + 2) + "+",
+    ]
+    lines += [f"| {row.ljust(width)} |" for row in rows]
+    lines.append("+" + "-" * (width + 2) + "+")
+    return lines
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     log = logging.getLogger("cloudflare-tunnel")
@@ -62,8 +84,6 @@ def main() -> None:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             f.write(config_text)
         log.info("wrote %s with %d route(s)", CONFIG_PATH, len(routes))
-        for cfg in routes:
-            log.info("https://%s --- %s", cfg.hostname, cfg.service)
     except Exception as exc:
         # A bare traceback here (the default for an uncaught exception)
         # buries the one line that actually matters -- e.g. Cloudflare's
@@ -75,6 +95,8 @@ def main() -> None:
         log.error("failed to reconcile Cloudflare Tunnel (%s): %s", type(exc).__name__, exc)
         sys.exit(1)
 
+    for line in _routing_table_lines(routes):
+        log.info(line)
     log.info("starting cloudflared tunnel %s", tunnel["name"])
     os.execvp("cloudflared", ["cloudflared", "tunnel", "--config", CONFIG_PATH, "run", tunnel["name"]])
 
