@@ -1,5 +1,5 @@
 """Entrypoint: validate config, reconcile Cloudflare + local cloudflared
-config, then exec into `cloudflared tunnel run` so it becomes PID 1.
+config, then supervise `cloudflared tunnel run` as a child process.
 """
 
 from __future__ import annotations
@@ -7,7 +7,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
+import subprocess
 import sys
+import time
 
 from . import reconcile, state as state_mod
 from .cf_client import CloudflareClient
@@ -18,13 +21,18 @@ STATE_PATH = os.path.join(DATA_DIR, "state.json")
 CREDENTIALS_PATH = os.path.join(DATA_DIR, "credentials.json")
 CONFIG_PATH = os.path.join(DATA_DIR, "config.yaml")
 
+# How long to wait for cloudflared to report a real connection (via the
+# same `cloudflared tunnel ready` check the HEALTHCHECK uses) before giving
+# up on showing the routing summary and just following its logs as-is.
+READY_TIMEOUT_SECONDS = 120
+READY_POLL_INTERVAL_SECONDS = 1
+
 
 def _routing_table_lines(routes: list) -> list[str]:
     """A bordered summary of the actual routing table, one log line per
     row -- matching cloudflared's own boxed "CONNECTIVITY PRE-CHECKS"
     banner style (each line logged separately, not one multi-line
-    message) so it reads as a natural continuation of the same log
-    stream once cloudflared's own logs start below it.
+    message).
     """
     if not routes:
         return []
@@ -39,6 +47,66 @@ def _routing_table_lines(routes: list) -> list[str]:
     lines += [f"| {row.ljust(width)} |" for row in rows]
     lines.append("+" + "-" * (width + 2) + "+")
     return lines
+
+
+def _wait_until_ready(is_alive, check_ready, timeout: float, poll_interval: float) -> bool:
+    """Poll `check_ready()` until it returns True, `is_alive()` returns
+    False (the process exited), or `timeout` elapses.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not is_alive():
+            return False
+        if check_ready():
+            return True
+        time.sleep(poll_interval)
+    return False
+
+
+def run_cloudflared(tunnel_name: str, routes: list, log: logging.Logger) -> int:
+    """Supervise cloudflared as a child process instead of exec'ing into
+    it, so the routing summary can print *after* confirming a real
+    connection -- as the last, most visible thing in the log stream --
+    instead of before cloudflared's own dozens of startup lines, which is
+    where an exec-and-replace approach is forced to put it.
+
+    Signals are forwarded to the child rather than handled by this
+    process directly, so `docker stop` still reaches cloudflared's own
+    graceful-shutdown handling (its `--grace-period`) exactly as it would
+    under a direct exec.
+    """
+    proc = subprocess.Popen(
+        ["cloudflared", "tunnel", "--config", CONFIG_PATH, "--no-autoupdate", "run", tunnel_name]
+    )
+
+    def _forward(signum, _frame):
+        proc.send_signal(signum)
+
+    signal.signal(signal.SIGTERM, _forward)
+    signal.signal(signal.SIGINT, _forward)
+
+    ready = _wait_until_ready(
+        is_alive=lambda: proc.poll() is None,
+        check_ready=lambda: subprocess.run(
+            ["cloudflared", "tunnel", "--config", CONFIG_PATH, "ready"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+        == 0,
+        timeout=READY_TIMEOUT_SECONDS,
+        poll_interval=READY_POLL_INTERVAL_SECONDS,
+    )
+
+    if ready:
+        for line in _routing_table_lines(routes):
+            log.info(line)
+    else:
+        log.warning(
+            "cloudflared did not report ready within %ss; skipping routing summary",
+            READY_TIMEOUT_SECONDS,
+        )
+
+    return proc.wait()
 
 
 def main() -> None:
@@ -95,10 +163,8 @@ def main() -> None:
         log.error("failed to reconcile Cloudflare Tunnel (%s): %s", type(exc).__name__, exc)
         sys.exit(1)
 
-    for line in _routing_table_lines(routes):
-        log.info(line)
     log.info("starting cloudflared tunnel %s", tunnel["name"])
-    os.execvp("cloudflared", ["cloudflared", "tunnel", "--config", CONFIG_PATH, "run", tunnel["name"]])
+    sys.exit(run_cloudflared(tunnel["name"], routes, log))
 
 
 def write_credentials(tunnel: dict) -> None:
