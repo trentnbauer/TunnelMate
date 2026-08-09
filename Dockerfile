@@ -1,7 +1,7 @@
 ARG CLOUDFLARED_VERSION=2026.7.3
 FROM cloudflare/cloudflared:${CLOUDFLARED_VERSION} AS cloudflared
 
-FROM python:3.12-slim AS final
+FROM python:3.14-slim AS final
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
