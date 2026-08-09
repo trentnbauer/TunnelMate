@@ -31,7 +31,7 @@ jobs:
       # `vMAJOR.MINOR`, and `vMAJOR` (floating major/minor tags roll forward
       # to the newest matching patch release).
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
