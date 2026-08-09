@@ -35,6 +35,13 @@ def main() -> None:
     client = CloudflareClient(global_cfg.api_token, global_cfg.account_id)
 
     tunnel = reconcile.reconcile_tunnel(client, global_cfg, state)
+    # Persist the tunnel's identity before doing anything else that could
+    # fail (zone lookup, DNS/Access reconciliation) -- otherwise a failure
+    # there would leave a freshly created tunnel unrecorded, and a restart
+    # would create a second, different tunnel while `credentials.json`
+    # (written below) still holds the first one's secret, permanently
+    # desyncing the two.
+    state_mod.save(STATE_PATH, state)
     if not os.path.exists(CREDENTIALS_PATH):
         write_credentials(tunnel)
 

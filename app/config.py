@@ -63,12 +63,17 @@ def _validate_service(name: str, value: str) -> str:
 
 
 def _split_hostname(name: str, raw: str) -> tuple[str, str | None]:
+    # DNS hostnames are case-insensitive; lowercase so e.g. HOSTNAME_1=App.example.com
+    # and HOSTNAME_2=app.example.com are recognized as the same host instead
+    # of slipping past duplicate detection and hitting a raw Cloudflare API
+    # error later. The path (if any) is left as-is -- origins may route it
+    # case-sensitively.
     if "/" not in raw:
-        return raw, None
+        return raw.lower(), None
     host, _, rest = raw.partition("/")
     if not host:
         raise ConfigError(f"{name}={raw!r} is missing a hostname before the '/'")
-    return host, f"/{rest}"
+    return host.lower(), f"/{rest}"
 
 
 def parse_hostnames(env: dict) -> list[HostnameConfig]:
