@@ -35,5 +35,18 @@ tunnel working end to end before pointing it at real apps -- replace it
 with your own services and update `SERVICE_N` to use their compose
 service names.
 
+## Keeping cloudflared up to date
+
+`cloudflared`'s own autoupdate is explicitly disabled inside the
+container (confirmed the non-root container user can't write its own
+binary anyway, so it was never going to work). Its version is pinned via
+the `Dockerfile`'s `ARG CLOUDFLARED_VERSION`, and a scheduled
+[workflow](.github/workflows/update-cloudflared.yml) checks weekly for a
+new `cloudflared` release, bumps that pin, and cuts a new TunnelMate
+version automatically. **This requires a `RELEASE_TOKEN` repo secret**
+(a PAT with `contents: write`) -- see
+[Versioning and Releases](https://github.com/trentnbauer/TunnelMate/wiki/Versioning-and-Releases)
+for why and how to add it.
+
 Security issues: see [SECURITY.md](SECURITY.md) -- please don't file
 those as public issues.
