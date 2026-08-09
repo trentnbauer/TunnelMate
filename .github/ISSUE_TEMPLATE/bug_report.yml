@@ -1,0 +1,53 @@
+name: Bug report
+description: Something isn't working the way it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: >
+        The `environment:` block from your `docker-compose.yml` / `.env`
+        (with `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and any
+        emails/real hostnames redacted).
+      render: yaml
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Container logs
+      description: >
+        Output of `docker compose logs tunnel` around the time of the
+        issue (redact any tokens/secrets first).
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: TunnelMate version
+      description: The `TMVer` you're running, or the image digest if using `latest`.
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true
+        - label: This isn't a security vulnerability (see [SECURITY.md](../../SECURITY.md) if it is).
+          required: true
