@@ -35,32 +35,43 @@ def main() -> None:
     client = CloudflareClient(global_cfg.api_token, global_cfg.account_id)
     persist = lambda: state_mod.save(STATE_PATH, state)  # noqa: E731
 
-    tunnel = reconcile.reconcile_tunnel(client, global_cfg, state)
-    # Persist the tunnel's identity before doing anything else that could
-    # fail (zone lookup, DNS/Access reconciliation) -- otherwise a failure
-    # there would leave a freshly created tunnel unrecorded, and a restart
-    # would create a second, different tunnel while `credentials.json`
-    # (written below) still holds the first one's secret, permanently
-    # desyncing the two.
-    persist()
-    if not os.path.exists(CREDENTIALS_PATH):
-        write_credentials(tunnel)
+    try:
+        tunnel = reconcile.reconcile_tunnel(client, global_cfg, state)
+        # Persist the tunnel's identity before doing anything else that could
+        # fail (zone lookup, DNS/Access reconciliation) -- otherwise a failure
+        # there would leave a freshly created tunnel unrecorded, and a restart
+        # would create a second, different tunnel while `credentials.json`
+        # (written below) still holds the first one's secret, permanently
+        # desyncing the two.
+        persist()
+        if not os.path.exists(CREDENTIALS_PATH):
+            write_credentials(tunnel)
 
-    log.info("fetching accessible zones for hostname auto-detection")
-    zones = client.list_zones()
+        log.info("fetching accessible zones for hostname auto-detection")
+        zones = client.list_zones()
 
-    routes = [cfg for cfg in hostnames if cfg.is_route]
-    path_scopes = [cfg for cfg in hostnames if not cfg.is_route]
-    # reconcile_routes/reconcile_path_scopes call `persist` after each
-    # individual Cloudflare mutation, so a failure partway through doesn't
-    # lose track of what already happened this run -- see reconcile.py.
-    reconcile.reconcile_routes(client, tunnel, routes, state, zones, persist)
-    reconcile.reconcile_path_scopes(client, path_scopes, state, persist)
+        routes = [cfg for cfg in hostnames if cfg.is_route]
+        path_scopes = [cfg for cfg in hostnames if not cfg.is_route]
+        # reconcile_routes/reconcile_path_scopes call `persist` after each
+        # individual Cloudflare mutation, so a failure partway through doesn't
+        # lose track of what already happened this run -- see reconcile.py.
+        reconcile.reconcile_routes(client, tunnel, routes, state, zones, persist)
+        reconcile.reconcile_path_scopes(client, path_scopes, state, persist)
 
-    config_text = reconcile.render_local_config(tunnel, CREDENTIALS_PATH, hostnames)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        f.write(config_text)
-    log.info("wrote %s with %d route(s)", CONFIG_PATH, len(routes))
+        config_text = reconcile.render_local_config(tunnel, CREDENTIALS_PATH, hostnames)
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            f.write(config_text)
+        log.info("wrote %s with %d route(s)", CONFIG_PATH, len(routes))
+    except Exception as exc:
+        # A bare traceback here (the default for an uncaught exception)
+        # buries the one line that actually matters -- e.g. Cloudflare's
+        # own "record already exists" -- under 15+ lines of call-stack
+        # noise, repeated on every restart/unless-stopped crash loop.
+        # Anything reaching here is already a message meant to be read
+        # (a CloudflareAPIError's str() is the API's own error body; a
+        # NoMatchingZoneError's is a plain sentence), so surface just that.
+        log.error("failed to reconcile Cloudflare Tunnel (%s): %s", type(exc).__name__, exc)
+        sys.exit(1)
 
     log.info("starting cloudflared tunnel %s", tunnel["name"])
     os.execvp("cloudflared", ["cloudflared", "tunnel", "--config", CONFIG_PATH, "run", tunnel["name"]])
