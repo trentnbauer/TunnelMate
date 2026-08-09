@@ -15,6 +15,12 @@ route's DNS record and tunnel ingress rule -- it only adds a Cloudflare
 Access policy scoped to the path, so it always requires USERS_N (there's no
 point creating one that's public, since the sub-path is already reachable
 via the base route).
+
+``APP_NAME_N`` optionally overrides what shows on the Cloudflare Access
+login page and in the Zero Trust dashboard's app list for that hostname/
+path -- Cloudflare's own default is the raw hostname/path (e.g. "Log in
+to app.example.com/admin"), which this exists to make friendlier (e.g.
+"App Admin").
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ class HostnameConfig:
     path: str | None  # None => whole-hostname route; set => path-scoped Access overlay
     service: str | None  # required iff path is None
     authusers: tuple[str, ...]
+    app_name: str | None = None  # Cloudflare Access application display name; defaults to scope_key
 
     @property
     def is_route(self) -> bool:
@@ -44,6 +51,15 @@ class HostnameConfig:
     @property
     def scope_key(self) -> str:
         return self.hostname if self.path is None else f"{self.hostname}{self.path}"
+
+    @property
+    def display_name(self) -> str:
+        """What shows on the Cloudflare Access login page ("Log in to
+        ...") and in the Zero Trust dashboard's app list -- APP_NAME_N if
+        set, otherwise the same hostname/path Cloudflare would otherwise
+        show by default.
+        """
+        return self.app_name or self.scope_key
 
 
 def _require(env: dict, name: str) -> str:
@@ -106,6 +122,8 @@ def parse_hostnames(env: dict) -> list[HostnameConfig]:
         raw_users = env.get(f"USERS_{index}", "").strip()
         authusers = tuple(u.strip() for u in raw_users.split(",") if u.strip())
 
+        app_name = env.get(f"APP_NAME_{index}", "").strip() or None
+
         service_raw = env.get(f"SERVICE_{index}", "").strip()
         if path is None:
             if not service_raw:
@@ -146,6 +164,7 @@ def parse_hostnames(env: dict) -> list[HostnameConfig]:
                 path=path,
                 service=service,
                 authusers=authusers,
+                app_name=app_name,
             )
         )
         index += 1

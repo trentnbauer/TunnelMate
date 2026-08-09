@@ -89,18 +89,30 @@ class CloudflareClient:
 
     # -- Access ------------------------------------------------------------
 
-    def create_access_app(self, domain: str) -> str:
+    def create_access_app(self, domain: str, name: str | None = None) -> str:
         payload = self._request(
             "POST",
             f"/accounts/{self.account_id}/access/apps",
             json={
-                "name": domain,
+                "name": name or domain,
                 "domain": domain,
                 "type": "self_hosted",
                 "session_duration": "24h",
             },
         )
         return payload["result"]["id"]
+
+    def update_access_app(self, app_id: str, domain: str, name: str) -> None:
+        self._request(
+            "PUT",
+            f"/accounts/{self.account_id}/access/apps/{app_id}",
+            json={
+                "name": name,
+                "domain": domain,
+                "type": "self_hosted",
+                "session_duration": "24h",
+            },
+        )
 
     def delete_access_app(self, app_id: str) -> None:
         # Deleting the app cascades to its app-scoped policies.
