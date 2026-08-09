@@ -59,7 +59,13 @@ def _validate_service(name: str, value: str) -> str:
         raise ConfigError(
             f"{name}={value!r} must be a {'/'.join(VALID_SERVICE_SCHEMES)} URL, e.g. http://app:3000"
         )
-    return value
+    # urlsplit() already lowercases parts.scheme for the check above, but
+    # returning `value` unchanged left the original casing in place --
+    # ingress.py's noTLSVerify decision does a case-sensitive check for
+    # "https://", so SERVICE_N=HTTPS://... validated fine here but silently
+    # skipped noTLSVerify downstream. Normalize once, at the source.
+    scheme, sep, rest = value.partition("://")
+    return f"{scheme.lower()}{sep}{rest}"
 
 
 def _split_hostname(name: str, raw: str) -> tuple[str, str | None]:

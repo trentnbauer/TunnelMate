@@ -53,6 +53,14 @@ def test_invalid_service_url_raises():
         parse_hostnames(base_env(SERVICE_1="not-a-url"))
 
 
+def test_service_scheme_is_lowercased():
+    # ingress.py's noTLSVerify decision does a case-sensitive check for
+    # "https://" -- an uppercase scheme must still come out normalized so
+    # that check doesn't silently miss it.
+    configs = parse_hostnames(base_env(SERVICE_1="HTTPS://app:8443"))
+    assert configs[0].service == "https://app:8443"
+
+
 def test_duplicate_route_hostname_raises():
     env = base_env(**{"HOSTNAME_2": "app.example.com", "SERVICE_2": "http://other:80"})
     with pytest.raises(ConfigError, match="app.example.com"):
