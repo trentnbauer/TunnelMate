@@ -19,10 +19,18 @@ def _yaml_str(value: str) -> str:
     return json.dumps(value)
 
 
+# Without an explicit bind, cloudflared's metrics/health server (which
+# exposes /ready) defaults to a random port (`--metrics`'s own default is
+# "0.0.0.0:0") -- pinning it here is what makes the Dockerfile's
+# HEALTHCHECK (which checks this exact address) able to find it at all.
+METRICS_ADDR = "127.0.0.1:2000"
+
+
 def render(tunnel_id: str, credentials_path: str, hostnames: list[HostnameConfig]) -> str:
     lines = [
         f"tunnel: {tunnel_id}",
         f"credentials-file: {_yaml_str(credentials_path)}",
+        f"metrics: {METRICS_ADDR}",
         "ingress:",
     ]
     for cfg in hostnames:

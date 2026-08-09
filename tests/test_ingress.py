@@ -1,5 +1,5 @@
 from app.config import HostnameConfig
-from app.ingress import render
+from app.ingress import METRICS_ADDR, render
 
 
 def route(index, hostname, service, authusers=()):
@@ -20,6 +20,7 @@ def test_renders_ingress_with_catchall():
     assert text.splitlines() == [
         "tunnel: tunnel-id-123",
         'credentials-file: "/data/credentials.json"',
+        "metrics: 127.0.0.1:2000",
         "ingress:",
         '  - hostname: "app.example.com"',
         '    service: "http://app:3000"',
@@ -48,6 +49,7 @@ def test_https_service_gets_no_tls_verify():
     assert text.splitlines() == [
         "tunnel: id",
         'credentials-file: "/data/credentials.json"',
+        "metrics: 127.0.0.1:2000",
         "ingress:",
         '  - hostname: "app.example.com"',
         '    service: "https://app:8443"',
@@ -69,6 +71,7 @@ def test_path_scoped_entries_are_not_rendered_as_ingress_rules():
     assert text.splitlines() == [
         "tunnel: id",
         'credentials-file: "/data/credentials.json"',
+        "metrics: 127.0.0.1:2000",
         "ingress:",
         '  - hostname: "app.example.com"',
         '    service: "http://app:3000"',
@@ -84,3 +87,12 @@ def test_special_characters_are_safely_quoted():
     text = render("id", "/data/credentials.json", hostnames)
 
     assert '    service: "http://app:3000/path#frag"' in text.splitlines()
+
+
+def test_metrics_bind_is_pinned_for_the_healthcheck():
+    # cloudflared's own default for --metrics is a random port; the
+    # Dockerfile's HEALTHCHECK depends on this being a fixed, known
+    # address instead.
+    hostnames = [route(1, "app.example.com", "http://app:3000")]
+    text = render("id", "/data/credentials.json", hostnames)
+    assert f"metrics: {METRICS_ADDR}" in text.splitlines()
