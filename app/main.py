@@ -33,6 +33,7 @@ def main() -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
     state = state_mod.load(STATE_PATH)
     client = CloudflareClient(global_cfg.api_token, global_cfg.account_id)
+    persist = lambda: state_mod.save(STATE_PATH, state)  # noqa: E731
 
     tunnel = reconcile.reconcile_tunnel(client, global_cfg, state)
     # Persist the tunnel's identity before doing anything else that could
@@ -41,7 +42,7 @@ def main() -> None:
     # would create a second, different tunnel while `credentials.json`
     # (written below) still holds the first one's secret, permanently
     # desyncing the two.
-    state_mod.save(STATE_PATH, state)
+    persist()
     if not os.path.exists(CREDENTIALS_PATH):
         write_credentials(tunnel)
 
@@ -50,9 +51,11 @@ def main() -> None:
 
     routes = [cfg for cfg in hostnames if cfg.is_route]
     path_scopes = [cfg for cfg in hostnames if not cfg.is_route]
-    reconcile.reconcile_routes(client, tunnel, routes, state, zones)
-    reconcile.reconcile_path_scopes(client, path_scopes, state)
-    state_mod.save(STATE_PATH, state)
+    # reconcile_routes/reconcile_path_scopes call `persist` after each
+    # individual Cloudflare mutation, so a failure partway through doesn't
+    # lose track of what already happened this run -- see reconcile.py.
+    reconcile.reconcile_routes(client, tunnel, routes, state, zones, persist)
+    reconcile.reconcile_path_scopes(client, path_scopes, state, persist)
 
     config_text = reconcile.render_local_config(tunnel, CREDENTIALS_PATH, hostnames)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
