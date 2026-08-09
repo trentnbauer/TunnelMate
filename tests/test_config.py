@@ -73,6 +73,17 @@ def test_duplicate_route_hostname_raises_case_insensitively():
         parse_hostnames(env)
 
 
+def test_trailing_dot_is_stripped():
+    configs = parse_hostnames(base_env(HOSTNAME_1="app.example.com."))
+    assert configs[0].hostname == "app.example.com"
+
+
+def test_duplicate_route_hostname_raises_with_trailing_dot():
+    env = base_env(**{"HOSTNAME_2": "app.example.com.", "SERVICE_2": "http://other:80"})
+    with pytest.raises(ConfigError, match="app.example.com"):
+        parse_hostnames(env)
+
+
 def test_hostname_is_lowercased():
     configs = parse_hostnames(base_env(HOSTNAME_1="App.Example.COM"))
     assert configs[0].hostname == "app.example.com"

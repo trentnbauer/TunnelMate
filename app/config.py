@@ -68,18 +68,26 @@ def _validate_service(name: str, value: str) -> str:
     return f"{scheme.lower()}{sep}{rest}"
 
 
+def _normalize_hostname(host: str) -> str:
+    # DNS hostnames are case-insensitive; lowercase so e.g. App.example.com
+    # and app.example.com are recognized as the same host instead of
+    # slipping past duplicate detection and hitting a raw Cloudflare API
+    # error later. A single trailing "." (the absolute-FQDN root label,
+    # e.g. from a `dig`/`nslookup` copy-paste) is the same hostname too --
+    # without stripping it, zone matching fails outright, since Cloudflare
+    # zone names never include the trailing dot.
+    host = host.lower()
+    return host[:-1] if host.endswith(".") else host
+
+
 def _split_hostname(name: str, raw: str) -> tuple[str, str | None]:
-    # DNS hostnames are case-insensitive; lowercase so e.g. HOSTNAME_1=App.example.com
-    # and HOSTNAME_2=app.example.com are recognized as the same host instead
-    # of slipping past duplicate detection and hitting a raw Cloudflare API
-    # error later. The path (if any) is left as-is -- origins may route it
-    # case-sensitively.
+    # The path (if any) is left as-is -- origins may route it case-sensitively.
     if "/" not in raw:
-        return raw.lower(), None
+        return _normalize_hostname(raw), None
     host, _, rest = raw.partition("/")
     if not host:
         raise ConfigError(f"{name}={raw!r} is missing a hostname before the '/'")
-    return host.lower(), f"/{rest}"
+    return _normalize_hostname(host), f"/{rest}"
 
 
 def parse_hostnames(env: dict) -> list[HostnameConfig]:
