@@ -1,0 +1,106 @@
+name: Update cloudflared version
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  bump-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Get latest cloudflared version
+        id: latest
+        run: |
+          version=$(curl -fsSL https://api.github.com/repos/cloudflare/cloudflared/releases/latest | jq -r .tag_name)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Get currently pinned version
+        id: current
+        run: |
+          current=$(grep -oP '(?<=^ARG CLOUDFLARED_VERSION=).*' Dockerfile)
+          echo "version=$current" >> "$GITHUB_OUTPUT"
+
+      # Bumps Dockerfile's ARG CLOUDFLARED_VERSION, opens a PR through the
+      # normal path (this repo's ruleset requires one -- no direct pushes
+      # to main), waits for its required checks, then merges it. Uses the
+      # default GITHUB_TOKEN, same as every other PR in this repo.
+      - name: Bump Dockerfile, open a PR, and merge it
+        id: bump
+        if: steps.latest.outputs.version != steps.current.outputs.version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_VERSION: ${{ steps.latest.outputs.version }}
+          OLD_VERSION: ${{ steps.current.outputs.version }}
+        run: |
+          set -euo pipefail
+          branch="bump-cloudflared-${NEW_VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          sed -i "s/^ARG CLOUDFLARED_VERSION=.*/ARG CLOUDFLARED_VERSION=${NEW_VERSION}/" Dockerfile
+          git commit -am "Bump cloudflared from ${OLD_VERSION} to ${NEW_VERSION}"
+          git push origin "$branch"
+
+          pr_url=$(gh pr create \
+            --title "Bump cloudflared from ${OLD_VERSION} to ${NEW_VERSION}" \
+            --body "Automated: [cloudflare/cloudflared ${NEW_VERSION}](https://github.com/cloudflare/cloudflared/releases/tag/${NEW_VERSION}) was released. Merging this triggers an automated TunnelMate patch release -- see the next job step." \
+            --base main --head "$branch")
+          pr_number="${pr_url##*/}"
+
+          for _ in $(seq 1 40); do
+            if output=$(gh pr checks "$pr_number" 2>&1); then
+              break
+            fi
+            if echo "$output" | grep -q pending; then
+              sleep 15
+              continue
+            fi
+            echo "::error::PR #$pr_number checks failed, not merging:"
+            echo "$output"
+            exit 1
+          done
+
+          gh pr merge "$pr_number" --squash --delete-branch
+
+      # Cuts the next TunnelMate patch release off the now-updated main.
+      # Requires a PAT (see below) instead of GITHUB_TOKEN: GitHub doesn't
+      # trigger new workflow runs (like docker-publish.yml's tag-push
+      # trigger) from pushes made by the default token, to prevent
+      # infinite workflow loops -- a tag pushed with GITHUB_TOKEN here
+      # would silently never build/publish an image.
+      - name: Tag and push the next TunnelMate release
+        if: steps.latest.outputs.version != steps.current.outputs.version
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          NEW_CLOUDFLARED_VERSION: ${{ steps.latest.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_TOKEN:-}" ]; then
+            echo "::error::RELEASE_TOKEN repo secret is not set -- the Dockerfile bump was merged, but no version tag was cut (a git push with GITHUB_TOKEN wouldn't trigger the publish workflow anyway). Add a PAT with 'contents: write' on this repo as the RELEASE_TOKEN secret, then cut the release manually: git tag vX.Y.Z && git push origin vX.Y.Z"
+            exit 1
+          fi
+
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+
+          latest_tag=$(git tag --list 'v*.*.*' | sort -V | tail -1)
+          major=$(echo "${latest_tag#v}" | cut -d. -f1)
+          minor=$(echo "${latest_tag#v}" | cut -d. -f2)
+          patch=$(echo "${latest_tag#v}" | cut -d. -f3)
+          next="v${major}.${minor}.$((patch + 1))"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$next" -m "$next: automated cloudflared bump to ${NEW_CLOUDFLARED_VERSION}"
+
+          git remote set-url origin "https://x-access-token:${RELEASE_TOKEN}@github.com/${{ github.repository }}.git"
+          git push origin "$next"
