@@ -62,6 +62,8 @@ def main() -> None:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             f.write(config_text)
         log.info("wrote %s with %d route(s)", CONFIG_PATH, len(routes))
+        for cfg in routes:
+            log.info("https://%s --- %s", cfg.hostname, cfg.service)
     except Exception as exc:
         # A bare traceback here (the default for an uncaught exception)
         # buries the one line that actually matters -- e.g. Cloudflare's
