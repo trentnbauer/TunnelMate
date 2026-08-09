@@ -59,6 +59,17 @@ def test_duplicate_route_hostname_raises():
         parse_hostnames(env)
 
 
+def test_duplicate_route_hostname_raises_case_insensitively():
+    env = base_env(**{"HOSTNAME_2": "App.Example.COM", "SERVICE_2": "http://other:80"})
+    with pytest.raises(ConfigError, match="app.example.com"):
+        parse_hostnames(env)
+
+
+def test_hostname_is_lowercased():
+    configs = parse_hostnames(base_env(HOSTNAME_1="App.Example.COM"))
+    assert configs[0].hostname == "app.example.com"
+
+
 def test_no_hostnames_raises():
     with pytest.raises(ConfigError, match="no hostnames configured"):
         parse_hostnames({})
